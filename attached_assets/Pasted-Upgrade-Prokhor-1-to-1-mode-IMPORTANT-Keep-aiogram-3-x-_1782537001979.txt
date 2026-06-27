@@ -1,0 +1,264 @@
+Upgrade Prokhor 1-to-1 mode.
+
+IMPORTANT:
+
+- Keep aiogram 3.x
+- Keep SQLite
+- Keep all existing functionality
+- Do not remove any current commands
+- Do not break existing behavior
+- Refactor code to be cleaner and scalable
+
+==================================================
+PART 1: LOCALIZATION SYSTEM
+==================================================
+
+Create a new file:
+
+translations.py
+
+Move ALL user-facing text from the entire project into this file.
+
+Examples:
+
+welcome messages
+errors
+notifications
+button texts
+confirmation messages
+usage messages
+reminder messages
+homework messages
+check-in messages
+all hardcoded strings
+
+Structure:
+
+TEXTS = {
+    "en": {
+        "welcome": "...",
+        "client_added": "...",
+        ...
+    },
+
+    "ru": {
+        "welcome": "...",
+        "client_added": "...",
+        ...
+    }
+}
+
+Create helper function:
+
+def t(lang, key, **kwargs):
+
+Example:
+
+t("en", "client_added", name="Ivan")
+
+should return:
+
+Client added: Ivan
+
+==================================================
+USER LANGUAGE STORAGE
+==================================================
+
+Add new field to psychologists table:
+
+language TEXT DEFAULT 'en'
+
+Add command:
+
+/language
+
+Bot should show buttons:
+
+🇬🇧 English
+🇷🇺 Русский
+
+When user selects language:
+
+save preference in database.
+
+All future bot messages must use selected language.
+
+Default language:
+
+English.
+
+==================================================
+CLIENT LANGUAGE SUPPORT
+==================================================
+
+Add language field to clients table:
+
+language TEXT DEFAULT 'en'
+
+When client joins through invite link:
+
+show language selection.
+
+Client also chooses:
+
+🇬🇧 English
+🇷🇺 Русский
+
+All messages sent to client must use client's language.
+
+Examples:
+
+homework
+reminders
+check-ins
+notifications
+
+==================================================
+PART 2: SESSION MANAGEMENT
+==================================================
+
+Create:
+
+/sessions
+
+Show all future sessions.
+
+Format:
+
+ID | Client | Date
+
+Create:
+
+/cancel_session <id>
+
+Delete session.
+
+Notify client if connected.
+
+Create:
+
+/reschedule_session <id> <YYYY-MM-DD HH:MM>
+
+Update session date.
+
+Notify client.
+
+==================================================
+PART 3: CLIENT TIMELINE
+==================================================
+
+Create:
+
+/timeline <client>
+
+Show complete chronological history:
+
+- sessions
+- notes
+- check-ins
+- homeworks
+
+Sort by date ascending.
+
+==================================================
+PART 4: ALERTS
+==================================================
+
+Create:
+
+/alerts
+
+Show:
+
+⚠ clients with average score below 4
+
+⚠ clients without check-ins for 10 days
+
+⚠ clients without sessions for 30 days
+
+==================================================
+PART 5: CLIENT TAGS
+==================================================
+
+Create table:
+
+client_tags
+
+Fields:
+
+id INTEGER PRIMARY KEY
+client_id INTEGER NOT NULL
+tag TEXT NOT NULL
+
+Commands:
+
+/tag <client> <tag>
+
+/find <tag>
+
+Example:
+
+/tag Ivan anxiety
+
+/find anxiety
+
+==================================================
+PART 6: CLIENT ARCHIVE
+==================================================
+
+Add field to clients table:
+
+is_archived INTEGER DEFAULT 0
+
+Create:
+
+/archive <client>
+
+Archived clients must not appear in:
+
+/clients
+
+Create:
+
+/archived_clients
+
+==================================================
+PART 7: EXPORT
+==================================================
+
+Create:
+
+/export <client>
+
+Generate TXT file.
+
+Include:
+
+Client information
+Notes
+Check-ins
+Homework
+Sessions
+
+Send file to psychologist.
+
+==================================================
+CODE QUALITY
+==================================================
+
+Create separate files:
+
+translations.py
+database.py
+
+Move database helper functions to database.py.
+
+Keep main.py readable.
+
+Add comments to all new functions.
+
+Code should be production-ready and easy to extend.
+
+Do not change existing command names.
+
+Do not remove current features.

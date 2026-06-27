@@ -1,0 +1,116 @@
+Upgrade the existing Telegram bot "Prokhor" (aiogram 3.x, Python).
+
+This is now a working MVP CRM for psychologists with:
+clients, notes, check-ins, engagement, reminders (stored in memory).
+
+Now we are adding AUTOMATION + SMART SYSTEM behavior.
+
+IMPORTANT RULES:
+- keep single file: main.py
+- aiogram 3.x polling only
+- in-memory storage only (NO databases)
+- do NOT add frameworks or web servers
+- keep logic simple and reliable
+
+---
+
+CURRENT DATA STRUCTURE:
+
+users = {
+  user_id: {
+    "clients": {
+      "client_name": {
+        "notes": [],
+        "checkins": [],
+        "auto_checkins": []
+      }
+    }
+  }
+}
+
+---
+
+NEW FEATURE 1 — AUTO CHECK-INS
+
+Implement simulated automatic check-ins.
+
+Add command:
+
+/auto_checkin <client> <interval_minutes>
+
+- stores configuration:
+  client should receive periodic check-in prompts
+  interval in minutes (simulation only, NO real scheduler)
+
+Store:
+{
+  client: name,
+  interval: minutes,
+  last_sent: timestamp (or None)
+}
+
+Reply:
+"Auto check-in enabled for <client> every <minutes> minutes"
+
+---
+
+NEW FEATURE 2 — /run_auto_checkins
+
+This is a MANUAL trigger (since we are not using real schedulers yet).
+
+When user calls it:
+- go through all auto_checkins configs
+- for each client:
+  simulate sending a check-in question:
+  "How are you feeling today? (1-10)"
+
+- store a placeholder check-in:
+  {"score": 0, "auto": true, "timestamp": "now"}
+
+Reply summary:
+"Auto check-ins executed for X clients"
+
+---
+
+NEW FEATURE 3 — SMART FLAGGING
+
+Update /engagement <client>:
+
+Add logic:
+
+- if last 3 check-ins average < 4 → add warning:
+  "⚠ Risk zone detected: low emotional stability trend"
+
+- if decreasing trend (each next check-in lower than previous):
+  add:
+  "⚠ Negative trend detected"
+
+---
+
+NEW FEATURE 4 — /dashboard
+
+Create a simple overview:
+
+For each client show:
+
+Client: Ivan
+Notes: X
+Check-ins: Y
+Avg score: Z
+Status:
+- Good stability / Moderate / Risk zone
+
+---
+
+UX RULES:
+- keep responses short
+- structured output
+- no unnecessary text
+- professional tone for psychologists
+
+---
+
+GOAL:
+
+Turn Prokhor into a proactive assistant:
+not just storing data, but simulating monitoring behavior and detecting risks.

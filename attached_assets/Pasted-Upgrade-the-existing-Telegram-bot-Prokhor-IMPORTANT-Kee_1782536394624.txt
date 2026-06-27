@@ -1,0 +1,190 @@
+Upgrade the existing Telegram bot "Prokhor".
+
+IMPORTANT:
+- Keep aiogram 3.x
+- Keep SQLite database
+- Do not break existing functionality
+- Keep current commands working
+- Extend current architecture only
+
+==================================================
+FEATURE 1: HOMEWORK SYSTEM
+==================================================
+
+Create a new table:
+
+homeworks:
+- id INTEGER PRIMARY KEY
+- client_id INTEGER NOT NULL
+- text TEXT NOT NULL
+- created_at TEXT
+- completed INTEGER DEFAULT 0
+
+Add command:
+
+/homework <client> <text>
+
+Example:
+
+/homework Ivan Keep an emotions diary for 7 days
+
+Behavior:
+
+1. save homework to database
+2. if client has telegram_id:
+   send homework to client
+
+Client receives:
+
+📚 New homework from your specialist:
+
+<homework text>
+
+3. psychologist receives:
+
+Homework sent to Ivan.
+
+Add command:
+
+/homeworks <client>
+
+Show all homeworks with status:
+
+✅ completed
+🕓 pending
+
+==================================================
+FEATURE 2: REAL CHECK-IN REQUESTS
+==================================================
+
+Create command:
+
+/send_checkin <client>
+
+Behavior:
+
+1. find client
+2. verify that telegram_id exists
+
+If client is not connected:
+
+Client is not connected to Telegram yet.
+
+Otherwise:
+
+Send message to client:
+
+How are you feeling today?
+
+Use InlineKeyboardMarkup.
+
+Buttons:
+
+1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣
+6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟
+
+Each button should send callback data:
+
+checkin_<client_id>_<score>
+
+==================================================
+FEATURE 3: CLIENT CHECK-IN CALLBACKS
+==================================================
+
+When client presses button:
+
+1. save score to checkins table
+2. answer callback:
+
+Thank you. Your response has been recorded.
+
+3. notify psychologist:
+
+Client Ivan submitted a check-in: 7/10
+
+Use psychologist telegram_id from database.
+
+==================================================
+FEATURE 4: CLIENT STATUS COMMAND
+==================================================
+
+Create command:
+
+/clients_status
+
+Output:
+
+🟢 Ivan — connected
+🔴 Maria — not connected
+🟢 Sergey — connected
+
+Use telegram_id field.
+
+==================================================
+FEATURE 5: SESSION REMINDERS TO CLIENTS
+==================================================
+
+Update session_reminder_task()
+
+Current reminders are sent only to psychologist.
+
+New behavior:
+
+If client.telegram_id exists:
+
+send reminder directly to client.
+
+24 hours before:
+
+⏰ Reminder:
+Tomorrow at HH:MM you have a session with your specialist.
+
+1 hour before:
+
+⏰ Reminder:
+Your session starts in 1 hour.
+
+If session link exists include:
+
+Session link:
+<link>
+
+Psychologist should still receive reminders too.
+
+==================================================
+FEATURE 6: CLIENT MENU
+==================================================
+
+When connected client uses /start
+
+show:
+
+Welcome to Prokhor.
+
+Available commands:
+
+/my_homeworks
+/checkin_history
+
+Create:
+
+/my_homeworks
+
+show only this client's homework.
+
+Create:
+
+/checkin_history
+
+show last 10 check-ins submitted by this client.
+
+==================================================
+UX RULES
+==================================================
+
+- keep messages short
+- use emojis carefully
+- do not remove current functionality
+- preserve SQLite structure
+- add comments to all new code
+- keep code readable

@@ -1,0 +1,530 @@
+You are a senior Python architect and Telegram product engineer.
+
+Project: Prokhor — Telegram assistant for psychologists.
+
+Stack:
+
+- Python
+- aiogram 3.x
+- SQLite
+- FSM
+- Telegram Bot API
+
+IMPORTANT:
+
+THIS IS AN EXISTING PROJECT.
+
+DO NOT REWRITE FROM SCRATCH.
+
+DO NOT REMOVE ANY EXISTING FEATURES.
+
+DO NOT BREAK ANY EXISTING COMMANDS.
+
+All existing slash commands must continue to work.
+
+Refactor safely.
+
+==================================================
+MAIN GOAL
+==================================================
+
+Transform the current bot from command-based UX into a complete Telegram application with menus, buttons, localization and scalable architecture.
+
+==================================================
+CRITICAL REQUIREMENTS
+==================================================
+
+1.
+
+Keep ALL existing functionality:
+
+- clients
+- notes
+- SOAP notes
+- homework
+- invitations
+- reminders
+- sessions
+- auto check-ins
+- analytics
+- exports
+- engagement
+- timeline
+- alerts
+- archive
+- tags
+
+2.
+
+All current slash commands MUST continue working.
+
+3.
+
+New UI must work entirely with buttons.
+
+4.
+
+The bot must remain stable after restart.
+
+5.
+
+Never lose existing SQLite data.
+
+6.
+
+Add migration logic.
+
+Example:
+
+if column does not exist:
+    add column
+
+Never destroy existing tables.
+
+==================================================
+PROJECT STRUCTURE
+==================================================
+
+Refactor into:
+
+main.py
+
+database.py
+
+translations.py
+
+keyboards.py
+
+utils.py
+
+handlers/
+
+    menu.py
+    clients.py
+    sessions.py
+    homework.py
+    notes.py
+    analytics.py
+    checkins.py
+    settings.py
+
+states/
+
+    client_states.py
+    session_states.py
+    homework_states.py
+    note_states.py
+
+==================================================
+LOCALIZATION
+==================================================
+
+Create:
+
+translations.py
+
+Move ALL visible text into this file.
+
+No hardcoded strings in handlers.
+
+Structure:
+
+TEXTS = {
+
+    "en": {
+
+    },
+
+    "ru": {
+
+    }
+
+}
+
+Create helper:
+
+t(lang, key, **kwargs)
+
+Examples:
+
+t(lang, "welcome")
+
+t(lang, "client_added", name=name)
+
+==================================================
+LANGUAGE STORAGE
+==================================================
+
+Psychologists table:
+
+language TEXT DEFAULT 'en'
+
+Clients table:
+
+language TEXT DEFAULT 'en'
+
+==================================================
+LANGUAGE SELECTION
+==================================================
+
+First launch:
+
+show:
+
+🇬🇧 English
+
+🇷🇺 Русский
+
+save selection.
+
+Create settings menu:
+
+🌍 Language
+
+Allow changing language anytime.
+
+==================================================
+CLIENT LANGUAGE
+==================================================
+
+When client joins via invitation link:
+
+ask language.
+
+All client messages must use client language.
+
+Examples:
+
+homework
+
+reminders
+
+check-ins
+
+notifications
+
+==================================================
+MAIN MENU
+==================================================
+
+Persistent ReplyKeyboard.
+
+Rows:
+
+👤 Clients
+
+📅 Sessions
+
+📚 Homework
+
+📊 Analytics
+
+🔔 Check-ins
+
+⚙️ Settings
+
+Always show keyboard.
+
+==================================================
+NAVIGATION
+==================================================
+
+Every screen must contain:
+
+⬅ Back
+
+🏠 Main Menu
+
+User must never get stuck.
+
+==================================================
+CLIENT SECTION
+==================================================
+
+Button:
+
+👤 Clients
+
+Open:
+
+➕ Add Client
+
+📋 Client List
+
+🔗 Invite Client
+
+🗄 Archived Clients
+
+==================================================
+CLIENT LIST
+==================================================
+
+Show clients as buttons.
+
+If more than 10 clients:
+
+implement pagination.
+
+Buttons:
+
+⬅ Previous
+
+➡ Next
+
+==================================================
+CLIENT CARD
+==================================================
+
+When user selects client:
+
+show summary:
+
+Name
+
+Number of notes
+
+Number of check-ins
+
+Average score
+
+Upcoming sessions
+
+Then buttons:
+
+📝 Add Note
+
+📄 SOAP Note
+
+📚 Assign Homework
+
+💬 Send Check-in
+
+📅 Schedule Session
+
+📈 Timeline
+
+🏷 Tags
+
+📊 Engagement
+
+📤 Export
+
+🗄 Archive
+
+==================================================
+SESSIONS
+==================================================
+
+Button:
+
+📅 Sessions
+
+Menu:
+
+➕ Schedule Session
+
+📋 Upcoming Sessions
+
+Upcoming sessions shown as buttons.
+
+Session card:
+
+✏ Reschedule
+
+❌ Cancel
+
+When cancelling or rescheduling:
+
+notify connected client.
+
+==================================================
+CHECKINS
+==================================================
+
+Menu:
+
+➕ Send Check-in
+
+⚙ Auto Check-ins
+
+📋 Recent Check-ins
+
+==================================================
+HOMEWORK
+==================================================
+
+Menu:
+
+➕ Assign Homework
+
+📋 Active Homework
+
+==================================================
+ANALYTICS
+==================================================
+
+Menu:
+
+📈 Dashboard
+
+⚠ Alerts
+
+Dashboard should show:
+
+client
+
+notes
+
+check-ins
+
+average score
+
+status
+
+==================================================
+ALERTS
+==================================================
+
+Show:
+
+clients with average score below 4
+
+clients without check-ins for 10 days
+
+clients without sessions for 30 days
+
+==================================================
+SETTINGS
+==================================================
+
+Menu:
+
+🌍 Language
+
+ℹ About Prokhor
+
+==================================================
+FSM
+==================================================
+
+Use FSM for all multistep actions.
+
+Examples:
+
+Add client.
+
+Schedule session.
+
+Assign homework.
+
+SOAP notes.
+
+Never require slash commands.
+
+==================================================
+DATABASE SAFETY
+==================================================
+
+Never recreate database.
+
+Never drop tables.
+
+Use migration functions.
+
+Example:
+
+check if column exists.
+
+add if missing.
+
+==================================================
+ERROR HANDLING
+==================================================
+
+Wrap all DB operations.
+
+Use try/except.
+
+Log errors.
+
+Bot must never crash.
+
+==================================================
+LOGGING
+==================================================
+
+Add structured logging.
+
+Log:
+
+errors
+
+new users
+
+new clients
+
+sessions
+
+homework
+
+==================================================
+CODE QUALITY
+==================================================
+
+Add comments.
+
+Add type hints.
+
+Reuse keyboard builders.
+
+Avoid duplicated code.
+
+Keep handlers small.
+
+==================================================
+PERFORMANCE
+==================================================
+
+Avoid loading all records every time.
+
+Use SQL LIMIT.
+
+Use pagination.
+
+==================================================
+UX
+==================================================
+
+Bot should feel like a real SaaS application.
+
+No command-line feeling.
+
+No long walls of text.
+
+Use emojis moderately.
+
+Use concise messages.
+
+==================================================
+FINAL CHECK
+==================================================
+
+Before finishing:
+
+verify:
+
+all existing commands still work
+
+all new buttons work
+
+database migration works
+
+language switching works
+
+client invitations still work
+
+bot starts without errors
+
+No functionality removed.
+
+Return complete production-ready implementation.

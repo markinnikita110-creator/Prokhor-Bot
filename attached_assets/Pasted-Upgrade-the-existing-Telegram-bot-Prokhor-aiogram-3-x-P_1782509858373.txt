@@ -1,0 +1,135 @@
+Upgrade the existing Telegram bot "Prokhor" (aiogram 3.x, Python).
+
+This is now a working MVP for psychologists/coaches:
+clients + notes + summaries already exist.
+
+Now extend it into a CLIENT ENGAGEMENT SYSTEM.
+
+IMPORTANT RULES:
+- keep single file: main.py
+- aiogram 3.x polling only
+- in-memory storage only (NO databases)
+- keep code simple and stable
+- do NOT introduce frameworks, APIs, or web servers
+
+---
+
+CURRENT DATA STRUCTURE:
+
+users = {
+  user_id: {
+    "clients": {
+      "client_name": {
+        "notes": [],
+        "checkins": []
+      }
+    }
+  }
+}
+
+---
+
+NEW FEATURES TO IMPLEMENT:
+
+---
+
+1. /checkin <client> <score>
+
+- score is integer 1–10 (well-being / state)
+- saves check-in under client
+- if client doesn't exist → create it
+- format stored:
+  {"score": int, "timestamp": simple string}
+
+reply:
+"Check-in saved for <client>: <score>/10"
+
+---
+
+2. /checkins <client>
+
+- show last 5 check-ins
+- format:
+  Check-ins for Ivan:
+  - 8/10
+  - 6/10
+  - 7/10
+
+- if none → "No check-ins yet"
+
+---
+
+3. /engagement <client>
+
+This is a simple engagement analytics feature.
+
+Calculate:
+
+- number of notes
+- number of check-ins
+- average check-in score
+
+Return:
+
+Client: Ivan
+Notes: X
+Check-ins: Y
+Average score: Z.Z
+
+Engagement label:
+- Z >= 7 → "Good stability"
+- Z 4–6.9 → "Moderate fluctuations"
+- Z < 4 → "Risk zone"
+
+---
+
+4. /remind <client> <minutes>
+
+- simulate reminder scheduling (NO real scheduler needed yet)
+- store reminder in memory:
+  {
+    "client": name,
+    "time": minutes_from_now
+  }
+
+- reply:
+"Reminder set for <client> in <minutes> minutes"
+
+(IMPORTANT: do NOT use APScheduler or cron yet — just store data structure)
+
+---
+
+5. /reminders
+
+- show all active reminders for user
+- format:
+  Reminders:
+  - Ivan in 30 min
+  - Maria in 60 min
+
+---
+
+DATA SAFETY RULES:
+- always initialize missing user/client structures safely
+- never crash on missing keys
+- auto-create client if needed
+
+---
+
+UX RULES:
+- keep responses short
+- consistent formatting
+- psychological/productivity tone
+- no extra verbosity
+
+---
+
+GOAL:
+
+Turn Prokhor into a behavioral tracking system for psychologists:
+
+- clients
+- notes
+- check-ins
+- engagement analytics
+- reminders (logical, not real-time yet)
