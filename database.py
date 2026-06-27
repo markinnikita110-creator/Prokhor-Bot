@@ -169,6 +169,49 @@ async def init_db():
                 notes      TEXT DEFAULT '',
                 UNIQUE(session_id, member_id)
             );
+
+            -- COHORT_V2: auto check-in configuration per cohort (one row per cohort)
+            CREATE TABLE IF NOT EXISTS cohort_checkin_configs (
+                cohort_id    INTEGER PRIMARY KEY,
+                question     TEXT DEFAULT '',
+                interval_h   INTEGER DEFAULT 24,
+                enabled      INTEGER DEFAULT 1,
+                last_sent_at TEXT
+            );
+
+            -- COHORT_V2: individual check-in responses from cohort members
+            CREATE TABLE IF NOT EXISTS cohort_checkins (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                cohort_id          INTEGER NOT NULL,
+                member_telegram_id INTEGER NOT NULL,
+                score              INTEGER,
+                question_text      TEXT DEFAULT '',
+                answered_at        TEXT
+            );
+
+            -- COHORT_V2: psychologist notes attached to a specific cohort session
+            CREATE TABLE IF NOT EXISTS cohort_session_notes (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      INTEGER NOT NULL,
+                psychologist_id INTEGER NOT NULL,
+                note_type       TEXT DEFAULT 'general',
+                text            TEXT DEFAULT '',
+                created_at      TEXT
+            );
+
+            -- COHORT_V2: supervision case logbook
+            CREATE TABLE IF NOT EXISTS supervision_cases (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                psychologist_id INTEGER NOT NULL,
+                client_alias    TEXT NOT NULL,
+                presenting_issue TEXT DEFAULT '',
+                hypothesis      TEXT DEFAULT '',
+                intervention    TEXT DEFAULT '',
+                outcome         TEXT DEFAULT '',
+                status          TEXT DEFAULT 'open',
+                created_at      TEXT,
+                updated_at      TEXT
+            );
         """)
         await db.commit()
 

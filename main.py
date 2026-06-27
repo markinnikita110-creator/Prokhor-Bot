@@ -10,11 +10,12 @@ from datetime import datetime, timedelta
 import aiosqlite
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database import (
     DB_PATH, get_client_lang, get_client_timezone, get_user_lang,
     get_user_timezone, get_cohort_member_lang, get_cohort_member_timezone,
-    init_db, migrate_db, utc_to_local,
+    init_db, migrate_db, now_str, utc_to_local,
 )
 from handlers import routers
 from handlers.clients import set_bot_username
@@ -30,12 +31,28 @@ bot = Bot(token=os.environ["BOT_TOKEN"])
 dp  = Dispatcher(storage=MemoryStorage())
 
 
-# ── Background: 24h / 1h session reminders ────────────────────────────────
+# ── Helper: build cohort check-in score keyboard ───────────────────────────
+def _cohort_checkin_kb(cohort_id: int, member_tg: int) -> InlineKeyboardMarkup:
+    """COHORT_V2: 1-10 score keyboard — mirrors the one in cohorts.py."""
+    row1 = [
+        InlineKeyboardButton(text=str(i),
+                             callback_data=f"cci_{cohort_id}_{member_tg}_{i}")
+        for i in range(1, 6)
+    ]
+    row2 = [
+        InlineKeyboardButton(text=str(i),
+                             callback_data=f"cci_{cohort_id}_{member_tg}_{i}")
+        for i in range(6, 11)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[row1, row2])
+
+
+# ── Background: reminder loop ──────────────────────────────────────────────
 async def reminder_loop():
     while True:
         await asyncio.sleep(60)
         try:
-            now = datetime.utcnow()  # scheduled_at is stored in UTC — compare UTC vs UTC
+            now = datetime.utcnow()
 
             # ── Individual session reminders ───────────────────────────────
             async with aiosqlite.connect(DB_PATH) as db:
@@ -110,7 +127,8 @@ async def reminder_loop():
                     "c.psychologist_id, c.name AS cohort_name "
                     "FROM cohort_sessions cs "
                     "JOIN cohorts c ON c.id = cs.cohort_id "
-                    "WHERE cs.reminded_1h = 0 AND cs.status = 'scheduled'"
+                    "WHERE cs.reminded_1h = 0 AND cs.status = 'scheduled' "
+                    "AND c.status != 'archived'"
                 )
                 cohort_sessions = await cur.fetchall()
 
@@ -121,7 +139,6 @@ async def reminder_loop():
                     continue
                 delta = session_dt - now
 
-                # COHORT_SESSION: gather active members for this cohort
                 async with aiosqlite.connect(DB_PATH) as db:
                     cur = await db.execute(
                         "SELECT telegram_id FROM cohort_members "
@@ -131,7 +148,6 @@ async def reminder_loop():
                     members = [row[0] for row in await cur.fetchall()]
 
                 if not r24 and timedelta(hours=23) < delta <= timedelta(hours=25):
-                    # COHORT_SESSION: notify psychologist (24h)
                     p_lang = await get_user_lang(psych_id)
                     _, p_offset = await get_user_timezone(psych_id)
                     p_local = utc_to_local(sched_str, p_offset)
@@ -142,7 +158,6 @@ async def reminder_loop():
                         t(p_lang, "cs_reminder_psych_24h",
                           num=sess_num, cohort=cohort_name, time=p_time) + p_link,
                     )
-                    # COHORT_SESSION: notify all members (24h) in their own timezone
                     for member_tg in members:
                         try:
                             m_lang = await get_cohort_member_lang(member_tg)
@@ -156,7 +171,7 @@ async def reminder_loop():
                                   num=sess_num, cohort=cohort_name, time=m_time) + m_link,
                             )
                         except Exception as e:
-                            log.warning("COHORT_SESSION: 24h remind failed member_tg=%d: %s", member_tg, e)
+                            log.warning("COHORT_SESSION: 24h remind fail member_tg=%d: %s", member_tg, e)
                     async with aiosqlite.connect(DB_PATH) as db:
                         await db.execute(
                             "UPDATE cohort_sessions SET reminded_24h = 1 WHERE id = ?", (cs_id,)
@@ -164,7 +179,6 @@ async def reminder_loop():
                         await db.commit()
 
                 elif not r1h and timedelta(minutes=50) < delta <= timedelta(minutes=70):
-                    # COHORT_SESSION: notify psychologist (1h)
                     p_lang = await get_user_lang(psych_id)
                     _, p_offset = await get_user_timezone(psych_id)
                     p_local = utc_to_local(sched_str, p_offset)
@@ -175,7 +189,6 @@ async def reminder_loop():
                         t(p_lang, "cs_reminder_psych_1h",
                           num=sess_num, cohort=cohort_name, time=p_time) + p_link,
                     )
-                    # COHORT_SESSION: notify all members (1h) in their own timezone
                     for member_tg in members:
                         try:
                             m_lang = await get_cohort_member_lang(member_tg)
@@ -189,12 +202,66 @@ async def reminder_loop():
                                   num=sess_num, cohort=cohort_name, time=m_time) + m_link,
                             )
                         except Exception as e:
-                            log.warning("COHORT_SESSION: 1h remind failed member_tg=%d: %s", member_tg, e)
+                            log.warning("COHORT_SESSION: 1h remind fail member_tg=%d: %s", member_tg, e)
                     async with aiosqlite.connect(DB_PATH) as db:
                         await db.execute(
                             "UPDATE cohort_sessions SET reminded_1h = 1 WHERE id = ?", (cs_id,)
                         )
                         await db.commit()
+
+            # ── COHORT_V2: auto check-ins ──────────────────────────────────
+            async with aiosqlite.connect(DB_PATH) as db:
+                cur = await db.execute(
+                    "SELECT cc.cohort_id, cc.question, cc.interval_h, cc.last_sent_at, "
+                    "c.psychologist_id, c.name "
+                    "FROM cohort_checkin_configs cc "
+                    "JOIN cohorts c ON c.id = cc.cohort_id "
+                    "WHERE cc.enabled = 1 AND c.status != 'archived'"
+                )
+                checkin_cfgs = await cur.fetchall()
+
+            for cohort_id, question, interval_h, last_sent_at, psych_id, cohort_name in checkin_cfgs:
+                if not question:
+                    continue
+                should_send = False
+                if last_sent_at is None:
+                    should_send = True
+                else:
+                    try:
+                        last_sent_dt = datetime.strptime(last_sent_at, "%Y-%m-%d %H:%M")
+                        if (now - last_sent_dt) >= timedelta(hours=interval_h):
+                            should_send = True
+                    except ValueError:
+                        should_send = True
+
+                if not should_send:
+                    continue
+
+                async with aiosqlite.connect(DB_PATH) as db:
+                    cur = await db.execute(
+                        "SELECT telegram_id FROM cohort_members "
+                        "WHERE cohort_id = ? AND status = 'active'",
+                        (cohort_id,),
+                    )
+                    members = [row[0] for row in await cur.fetchall()]
+
+                sent = 0
+                for member_tg in members:
+                    try:
+                        kb = _cohort_checkin_kb(cohort_id, member_tg)
+                        await bot.send_message(member_tg, question, reply_markup=kb)
+                        sent += 1
+                    except Exception as e:
+                        log.warning("COHORT_V2: auto-checkin fail member_tg=%d: %s", member_tg, e)
+
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute(
+                        "UPDATE cohort_checkin_configs SET last_sent_at = ? WHERE cohort_id = ?",
+                        (now_str(), cohort_id),
+                    )
+                    await db.commit()
+                log.info("COHORT_V2: auto-checkin sent cohort_id=%d members=%d/%d",
+                         cohort_id, sent, len(members))
 
         except Exception as e:
             log.error("Reminder loop error: %s", e)
@@ -209,7 +276,6 @@ async def main():
     set_bot_username(me.username or "")
     log.info("Bot started: @%s", me.username)
 
-    # Register all routers
     for r in routers:
         dp.include_router(r)
 

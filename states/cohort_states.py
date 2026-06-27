@@ -1,8 +1,7 @@
 from aiogram.fsm.state import State, StatesGroup
 
-# COHORT: FSM states for the cohort creation wizard
 
-
+# COHORT: FSM for cohort creation wizard
 class CohortCreateForm(StatesGroup):
     name = State()
     description = State()
@@ -10,7 +9,7 @@ class CohortCreateForm(StatesGroup):
     type_ = State()
 
 
-# COHORT_SESSION: FSM states for scheduling a cohort session
+# COHORT_SESSION: FSM for scheduling a group session
 class CohortScheduleForm(StatesGroup):
     cohort = State()
     session_number = State()
@@ -19,7 +18,32 @@ class CohortScheduleForm(StatesGroup):
     link = State()
 
 
-# COHORT_SESSION: FSM states for recording attendance
+# COHORT_SESSION: FSM for recording attendance
 class CohortAttendanceForm(StatesGroup):
     cohort = State()
     session = State()
+
+
+# COHORT_V2: FSM for broadcasting a message to all cohort members
+class CohortBroadcastForm(StatesGroup):
+    message = State()
+    confirm = State()
+
+
+# COHORT_V2: FSM for configuring auto check-ins for a cohort
+class CohortCheckinSetupForm(StatesGroup):
+    question = State()
+    interval = State()
+
+
+# COHORT_V2: FSM for adding a plain note to a cohort session
+class CohortSessionNoteForm(StatesGroup):
+    note_text = State()
+
+
+# COHORT_V2: FSM for adding a SOAP note to a cohort session (4 steps)
+class CohortSOAPNoteForm(StatesGroup):
+    s = State()
+    o = State()
+    a = State()
+    p = State()

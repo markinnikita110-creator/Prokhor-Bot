@@ -294,6 +294,125 @@ TEXTS = {
         "cs_reminder_psych_24h":    "🔔 Cohort session #{num} ({cohort}) — tomorrow at {time}. Members notified.{link_line}",
         "cs_reminder_psych_1h":     "🔔 Cohort session #{num} ({cohort}) — in 1 hour at {time}. Members notified.{link_line}",
         "cs_link_line":             "\n🔗 {link}",
+
+        # ── MENU: hierarchical reply keyboard ─────────────────────────────
+        "btn_menu_individual":   "👤 Individual",
+        "btn_menu_cohorts":      "👥 My Cohorts",
+        "btn_menu_summary":      "📊 Summary",
+        "btn_menu_settings":     "⚙️ Settings",
+        "btn_menu_back":         "⬅️ Back",
+        # Individual submenu
+        "btn_ind_add_client":    "➕ Add Client",
+        "btn_ind_client_list":   "📋 Client List",
+        "btn_ind_new_note":      "📝 New Note",
+        "btn_ind_schedule":      "📅 Schedule Session",
+        "btn_ind_reminders":     "⏰ Reminders",
+        # Cohorts submenu
+        "btn_coh_create":        "➕ Create Cohort",
+        "btn_coh_list":          "📋 Cohort List",
+        # Summary submenu
+        "btn_sum_clients":       "👤 Clients",
+        "btn_sum_cohorts":       "👥 Cohorts",
+        "btn_sum_stats":         "📈 Statistics",
+        # Settings submenu
+        "btn_set_language":      "🌍 Language",
+        "btn_set_timezone":      "🕐 Timezone",
+        "btn_set_notifs":        "🔔 Notifications",
+        # Section headers
+        "section_individual":    "👤 Individual:",
+        "section_cohorts_menu":  "👥 My Cohorts:",
+        "section_summary":       "📊 Summary:",
+        "section_settings_menu": "⚙️ Settings:",
+
+        # ── COHORT_V2: cohort action menu labels ───────────────────────────
+        "cv2_members":    "👥 Members",
+        "cv2_schedule":   "📅 Schedule",
+        "cv2_attendance": "✅ Attendance",
+        "cv2_checkins":   "📊 Check-ins",
+        "cv2_notes":      "📝 Notes",
+        "cv2_broadcast":  "📢 Broadcast",
+        "cv2_stats":      "📊 Statistics",
+        "cv2_archive":    "📦 Archive",
+        "cv2_back":       "⬅️ Back",
+        "cohort_action_title": "📋 {name}:",
+
+        # Members list
+        "cv2_members_title":   "Members of «{cohort}» ({count}):",
+        "cv2_member_row":      "• {name}",
+        "cv2_no_members":      "No members in this cohort yet.",
+
+        # Broadcast
+        "cv2_broadcast_ask":        "Enter the message to send to all {count} member(s) of «{cohort}»:",
+        "cv2_broadcast_preview":    "📣 Preview:\n\n{text}\n\nSend to {count} member(s)?",
+        "cv2_broadcast_send":       "✅ Send",
+        "cv2_broadcast_cancel":     "❌ Cancel",
+        "cv2_broadcast_done":       "✅ Sent to {sent}/{total} member(s).",
+        "cv2_broadcast_no_members": "No active members to send to.",
+
+        # Archive
+        "cv2_archive_confirm":  "Archive cohort «{cohort}»?\nReminders will stop for all members.",
+        "cv2_archive_yes":      "📦 Archive",
+        "cv2_archive_no":       "❌ Cancel",
+        "cv2_archived_ok":      "✅ Cohort «{cohort}» archived.",
+        "cv2_already_archived": "This cohort is already archived.",
+
+        # Stats
+        "cv2_stats_title":          "📊 Stats — {cohort}:",
+        "cv2_stats_members":        "Members: {count}",
+        "cv2_stats_sessions":       "Sessions: {total} ({completed} completed)",
+        "cv2_stats_attendance_pct": "Avg attendance: {pct}%",
+        "cv2_stats_checkins":       "Check-in responses: {count}",
+        "cv2_stats_avg_score":      "Avg score: {avg}/10",
+
+        # Check-ins
+        "cv2_checkin_options_title": "Check-ins for «{cohort}»:",
+        "cv2_checkin_btn_setup":     "⚙️ Setup Auto Check-in",
+        "cv2_checkin_btn_summary":   "📊 View Summary",
+        "cv2_checkin_btn_send_now":  "📤 Send Now",
+        "cv2_checkin_ask_question":  "Enter the check-in question (will be sent to all members):",
+        "cv2_checkin_ask_interval":  "Send every N hours (e.g. 24 for daily):",
+        "cv2_checkin_saved":         "✅ Check-in configured.\nQuestion: {q}\nInterval: every {h}h",
+        "cv2_checkin_sent":          "✅ Check-in sent to {count} member(s).",
+        "cv2_checkin_summary_title": "Check-in summary — {cohort}:",
+        "cv2_checkin_row":           "• {name}: {count} response(s), avg {avg}/10",
+        "cv2_no_checkin_data":       "No check-in data yet.",
+        "cv2_checkin_member_thanks": "✅ Your response has been recorded. Thank you!",
+
+        # Session notes
+        "cv2_notes_pick_session": "Select a session to view or add notes:",
+        "cv2_notes_title":        "Notes — Session #{num}:",
+        "cv2_note_row":           "📝 {text}",
+        "cv2_soap_row":           "📋 SOAP:\n{text}",
+        "cv2_notes_empty":        "No notes for this session yet.",
+        "cv2_note_btn_add":       "➕ Add Note",
+        "cv2_note_btn_soap":      "📋 SOAP Note",
+        "cv2_note_ask":           "Enter your note for Session #{num}:",
+        "cv2_note_saved":         "✅ Note saved.",
+        "cv2_soap_s":             "SOAP — Session #{num}.\n\nS — Subjective (client's words, mood, complaints):",
+        "cv2_soap_o":             "O — Objective (your observations, behavior, test results):",
+        "cv2_soap_a":             "A — Assessment (clinical impression, hypothesis):",
+        "cv2_soap_p":             "P — Plan (next steps, homework, session focus):",
+        "cv2_soap_saved":         "✅ SOAP note saved for Session #{num}.",
+
+        # Notifications stub
+        "notifs_not_implemented": "🔔 Notification preferences are coming soon.",
+
+        # Supervision
+        "sup_case_alias":       "Enter a client alias (no real names please):",
+        "sup_case_issue":       "Presenting issue — what brings the client:",
+        "sup_case_hypothesis":  "Your working hypothesis:",
+        "sup_case_intervention":"Intervention used or planned:",
+        "sup_case_outcome":     "Expected or observed outcome:",
+        "sup_case_saved":       "✅ Supervision case saved: {alias}",
+        "sup_logbook_title":    "Supervision logbook — {count} case(s):",
+        "sup_logbook_row":      "#{id} {alias} [{status}] — {date}",
+        "sup_logbook_empty":    "No supervision cases yet. Use /supervision_case to add one.",
+        "sup_progress_title":   "Open supervision cases:",
+        "sup_progress_row":     "#{id} {alias}\nIssue: {issue}\nHypothesis: {hyp}\nIntervention: {interv}\nOutcome: {outcome}",
+        "sup_progress_empty":   "No open supervision cases.",
+        "sup_close_btn":        "✅ Close case",
+        "sup_case_closed":      "✅ Case #{id} marked as closed.",
+        "sup_case_not_found":   "Case not found.",
     },
 
     "ru": {
@@ -591,6 +710,125 @@ TEXTS = {
         "cs_reminder_psych_24h":    "🔔 Сессия когорты #{num} ({cohort}) — завтра в {time}. Участники уведомлены.{link_line}",
         "cs_reminder_psych_1h":     "🔔 Сессия когорты #{num} ({cohort}) — через час в {time}. Участники уведомлены.{link_line}",
         "cs_link_line":             "\n🔗 {link}",
+
+        # ── MENU: иерархическая клавиатура ────────────────────────────────
+        "btn_menu_individual":   "👤 Индивидуальные",
+        "btn_menu_cohorts":      "👥 Мои когорты",
+        "btn_menu_summary":      "📊 Сводка",
+        "btn_menu_settings":     "⚙️ Настройки",
+        "btn_menu_back":         "⬅️ Назад",
+        # Подменю «Индивидуальные»
+        "btn_ind_add_client":    "➕ Добавить клиента",
+        "btn_ind_client_list":   "📋 Список клиентов",
+        "btn_ind_new_note":      "📝 Новая заметка",
+        "btn_ind_schedule":      "📅 Запланировать сессию",
+        "btn_ind_reminders":     "⏰ Напоминания",
+        # Подменю «Когорты»
+        "btn_coh_create":        "➕ Создать когорту",
+        "btn_coh_list":          "📋 Список когорт",
+        # Подменю «Сводка»
+        "btn_sum_clients":       "👤 Клиенты",
+        "btn_sum_cohorts":       "👥 Когорты",
+        "btn_sum_stats":         "📈 Статистика",
+        # Подменю «Настройки»
+        "btn_set_language":      "🌍 Язык",
+        "btn_set_timezone":      "🕐 Часовой пояс",
+        "btn_set_notifs":        "🔔 Уведомления",
+        # Заголовки разделов
+        "section_individual":    "👤 Индивидуальные:",
+        "section_cohorts_menu":  "👥 Мои когорты:",
+        "section_summary":       "📊 Сводка:",
+        "section_settings_menu": "⚙️ Настройки:",
+
+        # ── COHORT_V2: кнопки меню когорты ────────────────────────────────
+        "cv2_members":    "👥 Участники",
+        "cv2_schedule":   "📅 Расписание",
+        "cv2_attendance": "✅ Посещаемость",
+        "cv2_checkins":   "📊 Чек-ины",
+        "cv2_notes":      "📝 Заметки",
+        "cv2_broadcast":  "📢 Рассылка",
+        "cv2_stats":      "📊 Статистика",
+        "cv2_archive":    "📦 Архивировать",
+        "cv2_back":       "⬅️ Назад",
+        "cohort_action_title": "📋 {name}:",
+
+        # Список участников
+        "cv2_members_title":   "Участники «{cohort}» ({count}):",
+        "cv2_member_row":      "• {name}",
+        "cv2_no_members":      "В этой когорте пока нет участников.",
+
+        # Рассылка
+        "cv2_broadcast_ask":        "Введите сообщение для рассылки всем {count} участникам «{cohort}»:",
+        "cv2_broadcast_preview":    "📣 Предпросмотр:\n\n{text}\n\nОтправить {count} участникам?",
+        "cv2_broadcast_send":       "✅ Отправить",
+        "cv2_broadcast_cancel":     "❌ Отмена",
+        "cv2_broadcast_done":       "✅ Отправлено {sent}/{total} участникам.",
+        "cv2_broadcast_no_members": "Нет активных участников для рассылки.",
+
+        # Архивация
+        "cv2_archive_confirm":  "Архивировать когорту «{cohort}»?\nНапоминания будут отключены.",
+        "cv2_archive_yes":      "📦 Архивировать",
+        "cv2_archive_no":       "❌ Отмена",
+        "cv2_archived_ok":      "✅ Когорта «{cohort}» архивирована.",
+        "cv2_already_archived": "Эта когорта уже архивирована.",
+
+        # Статистика
+        "cv2_stats_title":          "📊 Статистика — {cohort}:",
+        "cv2_stats_members":        "Участников: {count}",
+        "cv2_stats_sessions":       "Сессий: {total} ({completed} завершено)",
+        "cv2_stats_attendance_pct": "Средняя посещаемость: {pct}%",
+        "cv2_stats_checkins":       "Ответов на чек-ины: {count}",
+        "cv2_stats_avg_score":      "Средний балл: {avg}/10",
+
+        # Чек-ины
+        "cv2_checkin_options_title": "Чек-ины для «{cohort}»:",
+        "cv2_checkin_btn_setup":     "⚙️ Настроить авточек-ин",
+        "cv2_checkin_btn_summary":   "📊 Сводка ответов",
+        "cv2_checkin_btn_send_now":  "📤 Отправить сейчас",
+        "cv2_checkin_ask_question":  "Введите вопрос для чек-ина (будет отправлен всем участникам):",
+        "cv2_checkin_ask_interval":  "Отправлять каждые N часов (например, 24 — ежедневно):",
+        "cv2_checkin_saved":         "✅ Чек-ин настроен.\nВопрос: {q}\nИнтервал: каждые {h}ч",
+        "cv2_checkin_sent":          "✅ Чек-ин отправлен {count} участникам.",
+        "cv2_checkin_summary_title": "Сводка чек-инов — {cohort}:",
+        "cv2_checkin_row":           "• {name}: {count} ответ(ов), средний балл {avg}/10",
+        "cv2_no_checkin_data":       "Данных чек-инов пока нет.",
+        "cv2_checkin_member_thanks": "✅ Ваш ответ записан. Спасибо!",
+
+        # Заметки по сессии
+        "cv2_notes_pick_session": "Выберите сессию для просмотра или добавления заметок:",
+        "cv2_notes_title":        "Заметки — Сессия #{num}:",
+        "cv2_note_row":           "📝 {text}",
+        "cv2_soap_row":           "📋 SOAP:\n{text}",
+        "cv2_notes_empty":        "Заметок для этой сессии пока нет.",
+        "cv2_note_btn_add":       "➕ Добавить заметку",
+        "cv2_note_btn_soap":      "📋 SOAP-заметка",
+        "cv2_note_ask":           "Введите заметку для Сессии #{num}:",
+        "cv2_note_saved":         "✅ Заметка сохранена.",
+        "cv2_soap_s":             "SOAP — Сессия #{num}.\n\nS — Субъективное (слова клиента, жалобы, настроение):",
+        "cv2_soap_o":             "O — Объективное (ваши наблюдения, поведение, тесты):",
+        "cv2_soap_a":             "A — Оценка (клиническое впечатление, гипотеза):",
+        "cv2_soap_p":             "P — План (следующие шаги, домашнее задание, фокус):",
+        "cv2_soap_saved":         "✅ SOAP-заметка сохранена для Сессии #{num}.",
+
+        # Уведомления (заглушка)
+        "notifs_not_implemented": "🔔 Настройки уведомлений появятся в ближайшем обновлении.",
+
+        # Супервизия
+        "sup_case_alias":       "Введите псевдоним клиента (без реального имени):",
+        "sup_case_issue":       "Запрос — с чем пришёл клиент:",
+        "sup_case_hypothesis":  "Рабочая гипотеза:",
+        "sup_case_intervention":"Использованная или планируемая интервенция:",
+        "sup_case_outcome":     "Ожидаемый или наблюдаемый результат:",
+        "sup_case_saved":       "✅ Случай супервизии сохранён: {alias}",
+        "sup_logbook_title":    "Журнал супервизии — {count} случай(ев):",
+        "sup_logbook_row":      "#{id} {alias} [{status}] — {date}",
+        "sup_logbook_empty":    "Случаев супервизии пока нет. Используйте /supervision_case.",
+        "sup_progress_title":   "Открытые случаи супервизии:",
+        "sup_progress_row":     "#{id} {alias}\nЗапрос: {issue}\nГипотеза: {hyp}\nИнтервенция: {interv}\nРезультат: {outcome}",
+        "sup_progress_empty":   "Нет открытых случаев супервизии.",
+        "sup_close_btn":        "✅ Закрыть случай",
+        "sup_case_closed":      "✅ Случай #{id} закрыт.",
+        "sup_case_not_found":   "Случай не найден.",
     },
 }
 
