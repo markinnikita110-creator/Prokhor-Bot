@@ -277,6 +277,18 @@ def role_select_keyboard(lang: str) -> InlineKeyboardMarkup:
 
 # ── FSM cancel ────────────────────────────────────────────────────────────
 
+# COHORT: type selection keyboard for cohort creation wizard
+def cohort_type_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_cohort_type_course"),
+                              callback_data="cohort_type_course")],
+        [InlineKeyboardButton(text=t(lang, "btn_cohort_type_group"),
+                              callback_data="cohort_type_group")],
+        [InlineKeyboardButton(text=t(lang, "btn_cohort_type_supervision"),
+                              callback_data="cohort_type_supervision")],
+    ])
+
+
 def cancel_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel"),

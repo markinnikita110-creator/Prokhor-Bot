@@ -5,7 +5,7 @@ import logging
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from database import (
     DB_PATH,
@@ -54,6 +54,50 @@ log = logging.getLogger(__name__)
 async def start_handler(message: Message, command: CommandObject, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
+
+    # ── COHORT: Deep-link via cohort invite token ──────────────────────────
+    if command.args and command.args.startswith("cohort_"):
+        token = command.args[len("cohort_"):].strip()
+        _psych_row, _ = await get_user_roles(uid)
+        lang = await get_user_lang(uid) if _psych_row else "en"
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT id, psychologist_id, name, max_participants FROM cohorts WHERE invite_token = ?",
+                (token,),
+            )
+            cohort_row = await cur.fetchone()
+        if not cohort_row:
+            await message.answer(t(lang, "cohort_invalid_token"))
+            return
+        cohort_id, psych_id, cohort_name, max_p = cohort_row
+        # COHORT: psychologist cannot join their own cohort
+        if psych_id == uid:
+            await message.answer(t(lang, "cohort_is_leader"))
+            return
+        # COHORT: check if already a member
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM cohort_members WHERE cohort_id = ? AND telegram_id = ? AND status = 'active'",
+                (cohort_id, uid),
+            )
+            already = await cur.fetchone()
+        if already:
+            await message.answer(t(lang, "cohort_already_member"))
+            return
+        # COHORT: show join prompt with confirmation button
+        join_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=t(lang, "btn_cohort_join"),
+                callback_data=f"cohort_join_{token}",
+            )
+        ]])
+        await message.answer(
+            t(lang, "cohort_join_prompt", name=cohort_name),
+            reply_markup=join_kb,
+            parse_mode="HTML",
+        )
+        log.info("COHORT: join prompt shown to user_id=%d cohort_id=%d", uid, cohort_id)
+        return
 
     # ── Deep-link: connecting via invite token ─────────────────────────────
     if command.args and command.args.startswith("client_"):
