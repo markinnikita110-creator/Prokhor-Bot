@@ -245,6 +245,27 @@ TEXTS = {
 
         # ── About ─────────────────────────────────────────────────────────
         "about_text": "🤖 Prokhor — assistant for psychologists and coaches.\n\nVersion 2.0\n\nFeatures: clients, sessions, homework, notes, SOAP, analytics, export, localization.",
+
+        # ── Cohorts ───────────────────────────────────────────────────────
+        "cohort_ask_name":              "Enter a name for the cohort:",
+        "cohort_ask_description":       "Enter a description (or press Skip):",
+        "cohort_ask_max":               "Max number of participants (enter a number or send anything to use the default of 12):",
+        "cohort_ask_type":              "Select cohort type:",
+        "cohort_created":               "✅ Cohort created: <b>{name}</b>\n\nType: {type}\nMax participants: {max}\n\nInvite link:\n{link}",
+        "cohort_list_title":            "Your cohorts:",
+        "no_cohorts":                   "No cohorts yet. Use /cohort_create to add one.",
+        "cohort_list_row":              "• {name} ({count}/{max} participants)",
+        "cohort_join_prompt":           "You are invited to join the cohort <b>{name}</b>.\n\nPress the button below to confirm.",
+        "cohort_join_confirm":          "✅ You have joined the cohort <b>{name}</b>!",
+        "cohort_already_member":        "You are already a member of this cohort.",
+        "cohort_is_leader":             "You are the leader of this cohort.",
+        "cohort_invalid_token":         "Invalid or expired cohort invite link.",
+        "cohort_full":                  "This cohort is full.",
+        "btn_cohort_join":              "✅ Join cohort",
+        "btn_cohort_skip_desc":         "⏭ Skip",
+        "btn_cohort_type_course":       "📚 Course",
+        "btn_cohort_type_group":        "👥 Group",
+        "btn_cohort_type_supervision":  "🔍 Supervision",
     },
 
     "ru": {
@@ -493,6 +514,27 @@ TEXTS = {
 
         # ── О боте ───────────────────────────────────────────────────────
         "about_text": "🤖 Прохор — ассистент для психологов и коучей.\n\nВерсия 2.0\n\nВозможности: клиенты, сессии, задания, заметки, SOAP, аналитика, экспорт, локализация.",
+
+        # ── Когорты ───────────────────────────────────────────────────────
+        "cohort_ask_name":              "Введите название когорты:",
+        "cohort_ask_description":       "Введите описание (или нажмите Пропустить):",
+        "cohort_ask_max":               "Максимальное количество участников (введите число или отправьте что угодно для значения по умолчанию — 12):",
+        "cohort_ask_type":              "Выберите тип когорты:",
+        "cohort_created":               "✅ Когорта создана: <b>{name}</b>\n\nТип: {type}\nМакс. участников: {max}\n\nСсылка-приглашение:\n{link}",
+        "cohort_list_title":            "Ваши когорты:",
+        "no_cohorts":                   "Когорт пока нет. Используйте /cohort_create для создания.",
+        "cohort_list_row":              "• {name} ({count}/{max} участников)",
+        "cohort_join_prompt":           "Вас приглашают в когорту <b>{name}</b>.\n\nНажмите кнопку ниже, чтобы подтвердить.",
+        "cohort_join_confirm":          "✅ Вы вступили в когорту <b>{name}</b>!",
+        "cohort_already_member":        "Вы уже являетесь участником этой когорты.",
+        "cohort_is_leader":             "Вы являетесь ведущим этой когорты.",
+        "cohort_invalid_token":         "Недействительная или устаревшая ссылка-приглашение.",
+        "cohort_full":                  "Когорта заполнена.",
+        "btn_cohort_join":              "✅ Вступить в когорту",
+        "btn_cohort_skip_desc":         "⏭ Пропустить",
+        "btn_cohort_type_course":       "📚 Курс",
+        "btn_cohort_type_group":        "👥 Группа",
+        "btn_cohort_type_supervision":  "🔍 Супервизия",
     },
 }
 

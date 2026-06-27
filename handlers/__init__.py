@@ -1,4 +1,4 @@
-from . import menu, clients, sessions, homework, notes, analytics, checkins, settings, timezone
+from . import menu, clients, sessions, homework, notes, analytics, checkins, settings, timezone, cohorts  # COHORT
 
 routers = [
     menu.router,
@@ -10,4 +10,5 @@ routers = [
     checkins.router,
     settings.router,
     timezone.router,
+    cohorts.router,  # COHORT
 ]

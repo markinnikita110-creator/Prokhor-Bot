@@ -120,6 +120,32 @@ async def init_db():
                 client_id INTEGER NOT NULL,
                 tag       TEXT NOT NULL
             );
+
+            -- COHORT: cohort groups created by psychologists
+            CREATE TABLE IF NOT EXISTS cohorts (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                psychologist_id  INTEGER NOT NULL,
+                name             TEXT NOT NULL,
+                description      TEXT DEFAULT '',
+                type             TEXT DEFAULT 'group',
+                max_participants INTEGER DEFAULT 12,
+                start_date       TEXT,
+                end_date         TEXT,
+                status           TEXT DEFAULT 'active',
+                created_at       TEXT,
+                invite_token     TEXT UNIQUE
+            );
+
+            -- COHORT: participants who joined a cohort via invite link
+            CREATE TABLE IF NOT EXISTS cohort_members (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                cohort_id   INTEGER NOT NULL,
+                telegram_id INTEGER NOT NULL,
+                name        TEXT,
+                joined_at   TEXT,
+                status      TEXT DEFAULT 'active',
+                UNIQUE(cohort_id, telegram_id)
+            );
         """)
         await db.commit()
 
