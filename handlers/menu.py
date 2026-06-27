@@ -1,11 +1,16 @@
-"""Main menu routing and /start."""
+"""Main menu routing and /start.
+MENU: Hierarchical reply keyboard navigation.
+"""
 
 import logging
 
+import aiosqlite
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+)
 
 from database import (
     DB_PATH,
@@ -23,39 +28,49 @@ from database import (
     set_user_timezone,
 )
 from keyboards import (
-    MENU_ANALYTICS,
-    MENU_CHECKINS,
-    MENU_CLIENTS,
-    MENU_HOMEWORK,
-    MENU_SESSIONS,
-    MENU_SETTINGS,
+    # MENU: new hierarchical menu constants
+    MENU_INDIVIDUAL, MENU_COHORTS_BTN, MENU_SUMMARY, MENU_SETTINGS_BTN, MENU_BACK,
+    MENU_IND_ADD_CLIENT, MENU_IND_CLIENT_LIST, MENU_IND_NEW_NOTE,
+    MENU_IND_SCHEDULE, MENU_IND_REMINDERS,
+    MENU_COH_CREATE, MENU_COH_LIST,
+    MENU_SUM_CLIENTS, MENU_SUM_COHORTS, MENU_SUM_STATS,
+    MENU_SET_LANGUAGE, MENU_SET_TIMEZONE, MENU_SET_NOTIFS,
+    # legacy (still used by inline back-buttons in section keyboards)
+    MENU_ANALYTICS, MENU_CHECKINS, MENU_CLIENTS, MENU_HOMEWORK, MENU_SESSIONS, MENU_SETTINGS,
+    # keyboard builders
     analytics_section_keyboard,
+    cancel_keyboard,
     checkins_section_keyboard,
     clients_section_keyboard,
+    cohorts_menu_keyboard,
     homework_section_keyboard,
+    individual_menu_keyboard,
     lang_keyboard,
     main_menu_keyboard,
     role_select_keyboard,
     sessions_section_keyboard,
     settings_keyboard,
+    settings_menu_keyboard,
+    summary_menu_keyboard,
     timezone_keyboard,
 )
 from states import OnboardingForm
+from states.cohort_states import CohortCreateForm
 from translations import t
 from utils import parse_timezone
-import aiosqlite
 
 router = Router()
 log = logging.getLogger(__name__)
 
 
 # ── /start ─────────────────────────────────────────────────────────────────
+
 @router.message(Command("start"))
 async def start_handler(message: Message, command: CommandObject, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
 
-    # ── COHORT: Deep-link via cohort invite token ──────────────────────────
+    # COHORT: Deep-link via cohort invite token
     if command.args and command.args.startswith("cohort_"):
         token = command.args[len("cohort_"):].strip()
         _psych_row, _ = await get_user_roles(uid)
@@ -70,11 +85,9 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
             await message.answer(t(lang, "cohort_invalid_token"))
             return
         cohort_id, psych_id, cohort_name, max_p = cohort_row
-        # COHORT: psychologist cannot join their own cohort
         if psych_id == uid:
             await message.answer(t(lang, "cohort_is_leader"))
             return
-        # COHORT: check if already a member
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute(
                 "SELECT 1 FROM cohort_members WHERE cohort_id = ? AND telegram_id = ? AND status = 'active'",
@@ -84,7 +97,6 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
         if already:
             await message.answer(t(lang, "cohort_already_member"))
             return
-        # COHORT: show join prompt with confirmation button
         join_kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text=t(lang, "btn_cohort_join"),
@@ -93,13 +105,12 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
         ]])
         await message.answer(
             t(lang, "cohort_join_prompt", name=cohort_name),
-            reply_markup=join_kb,
-            parse_mode="HTML",
+            reply_markup=join_kb, parse_mode="HTML",
         )
         log.info("COHORT: join prompt shown to user_id=%d cohort_id=%d", uid, cohort_id)
         return
 
-    # ── Deep-link: connecting via invite token ─────────────────────────────
+    # Deep-link: connecting via client invite token
     if command.args and command.args.startswith("client_"):
         token = command.args.strip()
         async with aiosqlite.connect(DB_PATH) as db:
@@ -114,14 +125,11 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
             await message.answer(t("en", "invite_invalid"))
             return
         client_id, psych_id, psych_username = row
-
-        # Block self-invite
         if psych_id == uid:
             lang = await get_user_lang(uid)
             await message.answer(t(lang, "self_invite_error"))
             log.warning("Self-invite blocked: user_id=%d", uid)
             return
-
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "UPDATE clients SET telegram_id = ? WHERE id = ?", (uid, client_id)
@@ -129,8 +137,6 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
             await db.commit()
         psych_name = f"@{psych_username}" if psych_username else "your specialist"
         log.info("Client connected: telegram_id=%d client_id=%d", uid, client_id)
-
-        # If user is also a psychologist → show role selector after connecting
         is_psych, _ = await get_user_roles(uid)
         lang = await get_user_lang(uid) if is_psych else "en"
         await message.answer(t(lang, "client_connected", specialist=psych_name))
@@ -141,11 +147,10 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
             await message.answer(t("en", "language_select"), reply_markup=lang_keyboard())
         return
 
-    # ── No deep-link: determine roles and route ────────────────────────────
+    # No deep-link: determine roles and route
     is_psych, client_row = await get_user_roles(uid)
 
     if is_psych and client_row:
-        # Dual role → let the user pick which interface they want
         lang = await get_user_lang(uid)
         await message.answer(t(lang, "dual_role_select"),
                              reply_markup=role_select_keyboard(lang))
@@ -153,15 +158,12 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
         return
 
     if client_row and not is_psych:
-        # Pure client
         lang = await get_client_lang(uid)
         await message.answer(t(lang, "client_menu"))
         return
 
-    # Psychologist (existing or new)
     is_new = await ensure_user(uid, message.from_user.username or "")
     if is_new:
-        # Brand new user → onboarding step 1: choose language
         await state.set_state(OnboardingForm.language)
         await message.answer(t("en", "onboarding_welcome"), reply_markup=lang_keyboard())
         log.info("New psychologist onboarding started: user_id=%d", uid)
@@ -172,6 +174,7 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
 
 
 # ── Role selection callbacks ───────────────────────────────────────────────
+
 @router.callback_query(F.data == "role_psych")
 async def role_psych_cb(callback: CallbackQuery):
     uid = callback.from_user.id
@@ -190,7 +193,8 @@ async def role_client_cb(callback: CallbackQuery):
     log.info("Switched to client role: user_id=%d", uid)
 
 
-# ── /switch — show role selector (dual-role users only) ───────────────────
+# ── /switch — show role selector ──────────────────────────────────────────
+
 @router.message(Command("switch"))
 async def switch_cmd(message: Message, state: FSMContext):
     await state.clear()
@@ -205,7 +209,8 @@ async def switch_cmd(message: Message, state: FSMContext):
         await message.answer(t(lang, "switch_no_dual_role"))
 
 
-# ── /reset_role — remove client role, keep psychologist ───────────────────
+# ── /reset_role ───────────────────────────────────────────────────────────
+
 @router.message(Command("reset_role"))
 async def reset_role_cmd(message: Message, state: FSMContext):
     await state.clear()
@@ -220,7 +225,8 @@ async def reset_role_cmd(message: Message, state: FSMContext):
         await message.answer(t(lang, "client_role_not_found"))
 
 
-# ── Language command (psychologist) ────────────────────────────────────────
+# ── /language ─────────────────────────────────────────────────────────────
+
 @router.message(Command("language"))
 async def language_cmd(message: Message):
     lang = await get_user_lang(message.from_user.id)
@@ -228,10 +234,7 @@ async def language_cmd(message: Message):
 
 
 # ══ Onboarding handlers ════════════════════════════════════════════════════
-# State-filtered handlers take priority over the generic setlang_callback
-# below because menu.router is registered first in handlers/__init__.py.
 
-# ── Onboarding step 1: language selection ─────────────────────────────────
 @router.callback_query(OnboardingForm.language, F.data.startswith("setlang_"))
 async def onboarding_setlang(callback: CallbackQuery, state: FSMContext):
     lang = callback.data.split("_")[1]
@@ -246,7 +249,6 @@ async def onboarding_setlang(callback: CallbackQuery, state: FSMContext):
     log.info("Onboarding lang set: user_id=%d lang=%s", uid, lang)
 
 
-# ── Onboarding step 2a: preset timezone button ────────────────────────────
 @router.callback_query(OnboardingForm.timezone, F.data.func(lambda d: d.startswith("tz_set_")))
 async def onboarding_tz_set(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -267,7 +269,6 @@ async def onboarding_tz_set(callback: CallbackQuery, state: FSMContext):
     log.info("Onboarding tz set: user_id=%d offset_min=%d", uid, offset_min)
 
 
-# ── Onboarding step 2b: "Enter manually" button ───────────────────────────
 @router.callback_query(OnboardingForm.timezone, F.data == "tz_custom")
 async def onboarding_tz_custom_btn(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -296,7 +297,6 @@ async def onboarding_tz_text(message: Message, state: FSMContext):
     log.info("Onboarding custom tz: user_id=%d tz=%s", uid, tz_name)
 
 
-# ── Onboarding step 2c: skip timezone ────────────────────────────────────
 @router.callback_query(OnboardingForm.timezone, F.data == "tz_skip")
 async def onboarding_tz_skip(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
@@ -310,7 +310,8 @@ async def onboarding_tz_skip(callback: CallbackQuery, state: FSMContext):
     log.info("Onboarding tz skipped: user_id=%d", uid)
 
 
-# ── Language callback (works for both psychologists and clients) ────────────
+# ── Language callback ──────────────────────────────────────────────────────
+
 @router.callback_query(F.data.startswith("setlang_"))
 async def setlang_callback(callback: CallbackQuery):
     lang = callback.data.split("_")[1]
@@ -333,33 +334,239 @@ async def setlang_callback(callback: CallbackQuery):
 
 
 # ── FSM cancel (global) ────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "fsm_cancel")
 async def fsm_cancel(callback: CallbackQuery, state: FSMContext):
     lang = await get_user_lang(callback.from_user.id)
     await state.clear()
     await callback.answer()
-    await callback.message.answer(t(lang, "fsm_cancelled"))
+    await callback.message.answer(t(lang, "fsm_cancelled"),
+                                  reply_markup=main_menu_keyboard(lang))
 
 
-# ── Noop (page indicator buttons) ─────────────────────────────────────────
+# ── Noop ──────────────────────────────────────────────────────────────────
+
 @router.callback_query(F.data == "noop")
 async def noop_callback(callback: CallbackQuery):
     await callback.answer()
 
 
 # ── Main menu home callback ────────────────────────────────────────────────
+
 @router.callback_query(F.data == "m_home")
 async def main_menu_cb(callback: CallbackQuery, state: FSMContext):
     lang = await get_user_lang(callback.from_user.id)
     await state.clear()
     await callback.answer()
+    await callback.message.answer(t(lang, "welcome"), reply_markup=main_menu_keyboard(lang))
+
+
+# ── Section callbacks (from inline Back buttons) ───────────────────────────
+
+@router.callback_query(F.data == "m_clients")
+async def cb_clients_section(callback: CallbackQuery):
+    lang = await get_user_lang(callback.from_user.id)
+    await callback.answer()
     try:
-        await callback.message.edit_text(t(lang, "welcome"), reply_markup=None)
+        await callback.message.edit_text(t(lang, "section_clients"),
+                                         reply_markup=clients_section_keyboard(lang))
     except Exception:
-        await callback.message.answer(t(lang, "welcome"))
+        await callback.message.answer(t(lang, "section_clients"),
+                                      reply_markup=clients_section_keyboard(lang))
 
 
-# ── Reply keyboard: route to sections ─────────────────────────────────────
+@router.callback_query(F.data == "m_sessions")
+async def cb_sessions_section(callback: CallbackQuery):
+    lang = await get_user_lang(callback.from_user.id)
+    await callback.answer()
+    try:
+        await callback.message.edit_text(t(lang, "section_sessions"),
+                                         reply_markup=sessions_section_keyboard(lang))
+    except Exception:
+        await callback.message.answer(t(lang, "section_sessions"),
+                                      reply_markup=sessions_section_keyboard(lang))
+
+
+# ══ MENU: New hierarchical routing ════════════════════════════════════════
+
+# ── Main menu: top-level buttons ──────────────────────────────────────────
+
+@router.message(F.text.in_(MENU_INDIVIDUAL))
+async def menu_individual(message: Message):
+    # MENU: show Individual submenu
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_individual"),
+                         reply_markup=individual_menu_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_COHORTS_BTN))
+async def menu_cohorts_btn(message: Message):
+    # MENU: show Cohorts submenu
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_cohorts_menu"),
+                         reply_markup=cohorts_menu_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_SUMMARY))
+async def menu_summary(message: Message):
+    # MENU: show Summary submenu
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_summary"),
+                         reply_markup=summary_menu_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_SETTINGS_BTN))
+async def menu_settings_btn(message: Message):
+    # MENU: show Settings submenu
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_settings_menu"),
+                         reply_markup=settings_menu_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_BACK))
+async def menu_back(message: Message):
+    # MENU: any Back button → return to main menu
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "welcome"), reply_markup=main_menu_keyboard(lang))
+
+
+# ── Individual submenu buttons ─────────────────────────────────────────────
+
+@router.message(F.text.in_(MENU_IND_ADD_CLIENT))
+async def menu_ind_add_client(message: Message, state: FSMContext):
+    # MENU: directly start add-client flow
+    from states import AddClientForm
+    lang = await get_user_lang(message.from_user.id)
+    await state.set_state(AddClientForm.name)
+    await message.answer(t(lang, "ask_client_name"), reply_markup=cancel_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_IND_CLIENT_LIST))
+async def menu_ind_client_list(message: Message):
+    # MENU: show inline client list
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_clients"),
+                         reply_markup=clients_section_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_IND_NEW_NOTE))
+async def menu_ind_new_note(message: Message):
+    # MENU: show client section (user picks client then adds note)
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_clients"),
+                         reply_markup=clients_section_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_IND_SCHEDULE))
+async def menu_ind_schedule(message: Message):
+    # MENU: show sessions section
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_sessions"),
+                         reply_markup=sessions_section_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_IND_REMINDERS))
+async def menu_ind_reminders(message: Message):
+    # MENU: show check-ins / reminders section
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_checkins"),
+                         reply_markup=checkins_section_keyboard(lang))
+
+
+# ── Cohorts submenu buttons ────────────────────────────────────────────────
+
+@router.message(F.text.in_(MENU_COH_CREATE))
+async def menu_coh_create(message: Message, state: FSMContext):
+    # MENU: directly start cohort-create FSM
+    lang = await get_user_lang(message.from_user.id)
+    await state.set_state(CohortCreateForm.name)
+    await message.answer(t(lang, "cohort_ask_name"), reply_markup=cancel_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_COH_LIST))
+async def menu_coh_list(message: Message):
+    # MENU: show cohort list as inline picker → leads to cohort_action_keyboard
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, name FROM cohorts WHERE psychologist_id = ? ORDER BY created_at DESC",
+            (uid,),
+        )
+        cohorts = await cur.fetchall()
+    if not cohorts:
+        await message.answer(t(lang, "no_cohorts"))
+        return
+    rows = [[InlineKeyboardButton(text=name, callback_data=f"cv2_pick_{cid}")]
+            for cid, name in cohorts]
+    await message.answer(t(lang, "cohort_list_title"),
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+# ── Summary submenu buttons ────────────────────────────────────────────────
+
+@router.message(F.text.in_(MENU_SUM_CLIENTS))
+async def menu_sum_clients(message: Message):
+    # MENU: client section in summary context
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_clients"),
+                         reply_markup=clients_section_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_SUM_COHORTS))
+async def menu_sum_cohorts(message: Message):
+    # MENU: cohort list for summary/stats view
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, name FROM cohorts WHERE psychologist_id = ? ORDER BY created_at DESC",
+            (uid,),
+        )
+        cohorts = await cur.fetchall()
+    if not cohorts:
+        await message.answer(t(lang, "no_cohorts"))
+        return
+    rows = [[InlineKeyboardButton(text=name, callback_data=f"cv2_pick_{cid}")]
+            for cid, name in cohorts]
+    await message.answer(t(lang, "cohort_list_title"),
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.message(F.text.in_(MENU_SUM_STATS))
+async def menu_sum_stats(message: Message):
+    # MENU: analytics/dashboard
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "section_analytics"),
+                         reply_markup=analytics_section_keyboard(lang))
+
+
+# ── Settings submenu buttons ───────────────────────────────────────────────
+
+@router.message(F.text.in_(MENU_SET_LANGUAGE))
+async def menu_set_language(message: Message):
+    # MENU: language picker
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "language_select"), reply_markup=lang_keyboard())
+
+
+@router.message(F.text.in_(MENU_SET_TIMEZONE))
+async def menu_set_timezone(message: Message):
+    # MENU: timezone picker
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "ask_timezone_settings"),
+                         reply_markup=timezone_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_SET_NOTIFS))
+async def menu_set_notifs(message: Message):
+    # MENU: notification settings (stub)
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(t(lang, "notifs_not_implemented"))
+
+
+# ── Legacy reply-keyboard handlers (kept for backward compat) ──────────────
+
 @router.message(F.text.in_(MENU_CLIENTS))
 async def menu_clients(message: Message):
     lang = await get_user_lang(message.from_user.id)
@@ -400,28 +607,3 @@ async def menu_settings(message: Message):
     lang = await get_user_lang(message.from_user.id)
     await message.answer(t(lang, "section_settings"),
                          reply_markup=settings_keyboard(lang))
-
-
-# ── Section callbacks (from inline Back buttons) ───────────────────────────
-@router.callback_query(F.data == "m_clients")
-async def cb_clients_section(callback: CallbackQuery):
-    lang = await get_user_lang(callback.from_user.id)
-    await callback.answer()
-    try:
-        await callback.message.edit_text(t(lang, "section_clients"),
-                                         reply_markup=clients_section_keyboard(lang))
-    except Exception:
-        await callback.message.answer(t(lang, "section_clients"),
-                                      reply_markup=clients_section_keyboard(lang))
-
-
-@router.callback_query(F.data == "m_sessions")
-async def cb_sessions_section(callback: CallbackQuery):
-    lang = await get_user_lang(callback.from_user.id)
-    await callback.answer()
-    try:
-        await callback.message.edit_text(t(lang, "section_sessions"),
-                                         reply_markup=sessions_section_keyboard(lang))
-    except Exception:
-        await callback.message.answer(t(lang, "section_sessions"),
-                                      reply_markup=sessions_section_keyboard(lang))

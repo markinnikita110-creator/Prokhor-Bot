@@ -1,4 +1,8 @@
-"""COHORT / COHORT_SESSION: Cohort management — create, list, join, schedule sessions, attendance."""
+"""COHORT / COHORT_SESSION / COHORT_V2: Full cohort management handler.
+
+Commands: /cohort_create, /cohorts, /cohort_schedule, /cohort_sessions,
+          /cohort_attendance + all cv2_* inline callbacks.
+"""
 
 import logging
 import secrets
@@ -17,38 +21,41 @@ from aiogram.types import (
 
 from database import (
     DB_PATH,
+    get_cohort_member_lang,
+    get_cohort_member_timezone,
     get_user_lang,
     get_user_timezone,
     local_to_utc,
     now_str,
     utc_to_local,
 )
-from keyboards import cancel_keyboard, cohort_type_keyboard
-from states.cohort_states import CohortAttendanceForm, CohortCreateForm, CohortScheduleForm
+from keyboards import cancel_keyboard, cohort_action_keyboard, cohort_type_keyboard
+from states.cohort_states import (
+    CohortAttendanceForm,
+    CohortBroadcastForm,
+    CohortCheckinSetupForm,
+    CohortCreateForm,
+    CohortScheduleForm,
+    CohortSessionNoteForm,
+    CohortSOAPNoteForm,
+)
 from translations import t
 
-# COHORT: import bot username from clients module (set at startup)
-from handlers.clients import BOT_USERNAME
+from handlers.clients import BOT_USERNAME  # COHORT: bot username for invite links
 
 router = Router()
 log = logging.getLogger(__name__)
 
 
-# ── COHORT: DB helpers ─────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT: DB helpers
+# ══════════════════════════════════════════════════════════════════════════
 
 def _make_cohort_token() -> str:
-    # COHORT: short random hex token for invite links
     return secrets.token_hex(6)
 
 
-async def _create_cohort(
-    psychologist_id: int,
-    name: str,
-    description: str,
-    type_: str,
-    max_participants: int,
-) -> tuple[int, str]:
-    """COHORT: Insert new cohort row. Returns (cohort_id, invite_token)."""
+async def _create_cohort(psychologist_id, name, description, type_, max_participants):
     token = _make_cohort_token()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -63,7 +70,6 @@ async def _create_cohort(
 
 
 async def _get_cohort_by_token(token: str):
-    """COHORT: Return cohort row or None."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT id, psychologist_id, name, max_participants FROM cohorts WHERE invite_token = ?",
@@ -73,7 +79,6 @@ async def _get_cohort_by_token(token: str):
 
 
 async def _get_member_count(cohort_id: int) -> int:
-    """COHORT: Count active members in a cohort."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT COUNT(*) FROM cohort_members WHERE cohort_id = ? AND status = 'active'",
@@ -84,7 +89,6 @@ async def _get_member_count(cohort_id: int) -> int:
 
 
 async def _is_member(cohort_id: int, telegram_id: int) -> bool:
-    """COHORT: Check if a user is already an active member."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT 1 FROM cohort_members WHERE cohort_id = ? AND telegram_id = ? AND status = 'active'",
@@ -94,7 +98,6 @@ async def _is_member(cohort_id: int, telegram_id: int) -> bool:
 
 
 async def _add_member(cohort_id: int, telegram_id: int, name: str):
-    """COHORT: Add a participant to cohort_members."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT OR IGNORE INTO cohort_members (cohort_id, telegram_id, name, joined_at, status) "
@@ -105,7 +108,6 @@ async def _add_member(cohort_id: int, telegram_id: int, name: str):
 
 
 async def _get_cohorts_for_psych(psychologist_id: int) -> list:
-    """COHORT: Return list of (id, name, max_participants) for a psychologist."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT id, name, max_participants FROM cohorts WHERE psychologist_id = ? ORDER BY created_at DESC",
@@ -114,16 +116,11 @@ async def _get_cohorts_for_psych(psychologist_id: int) -> list:
         return await cur.fetchall()
 
 
-# ── COHORT_SESSION: DB helpers ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_SESSION: DB helpers
+# ══════════════════════════════════════════════════════════════════════════
 
-async def _create_cohort_session(
-    cohort_id: int,
-    session_number: int,
-    scheduled_at_utc: str,
-    topic: str,
-    link: str,
-) -> int:
-    """COHORT_SESSION: Insert a cohort session. Returns session_id."""
+async def _create_cohort_session(cohort_id, session_number, scheduled_at_utc, topic, link):
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "INSERT INTO cohort_sessions "
@@ -137,7 +134,6 @@ async def _create_cohort_session(
 
 
 async def _get_cohort_sessions(cohort_id: int) -> list:
-    """COHORT_SESSION: Return all sessions for a cohort ordered by scheduled_at."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT id, session_number, scheduled_at, topic, link, status "
@@ -148,7 +144,6 @@ async def _get_cohort_sessions(cohort_id: int) -> list:
 
 
 async def _get_scheduled_sessions(cohort_id: int) -> list:
-    """COHORT_SESSION: Return only scheduled/completed sessions (for attendance)."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT id, session_number, scheduled_at, topic "
@@ -161,7 +156,6 @@ async def _get_scheduled_sessions(cohort_id: int) -> list:
 
 
 async def _get_active_members(cohort_id: int) -> list:
-    """COHORT_SESSION: Return (id, telegram_id, name) for all active members."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT id, telegram_id, name FROM cohort_members "
@@ -172,7 +166,6 @@ async def _get_active_members(cohort_id: int) -> list:
 
 
 async def _upsert_attendance(session_id: int, member_id: int, status: str):
-    """COHORT_SESSION: Insert or update attendance record."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO cohort_attendance (session_id, member_id, status) VALUES (?, ?, ?) "
@@ -183,7 +176,6 @@ async def _upsert_attendance(session_id: int, member_id: int, status: str):
 
 
 async def _get_attendance_for_session(session_id: int) -> dict:
-    """COHORT_SESSION: Return {member_id: status} for a session."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT member_id, status FROM cohort_attendance WHERE session_id = ?",
@@ -194,7 +186,6 @@ async def _get_attendance_for_session(session_id: int) -> dict:
 
 
 async def _get_cohort_for_session(session_id: int):
-    """COHORT_SESSION: Return (cohort_id, cohort_name, session_number) for a session."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT cs.cohort_id, c.name, cs.session_number "
@@ -205,12 +196,18 @@ async def _get_cohort_for_session(session_id: int):
         return await cur.fetchone()
 
 
-# ── COHORT_SESSION: attendance keyboard builder ────────────────────────────
+async def _get_cohort_name(cohort_id: int) -> str:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT name FROM cohorts WHERE id = ?", (cohort_id,))
+        row = await cur.fetchone()
+    return row[0] if row else str(cohort_id)
 
-STATUS_EMOJI = {"present": "✅", "absent": "❌", "pending": "⏳"}
 
-async def _attendance_kb(session_id: int, cohort_id: int, lang: str) -> tuple[str, InlineKeyboardMarkup | None]:
-    """COHORT_SESSION: Build attendance inline keyboard and header text."""
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_SESSION: Attendance keyboard builder
+# ══════════════════════════════════════════════════════════════════════════
+
+async def _attendance_kb(session_id: int, cohort_id: int, lang: str):
     members = await _get_active_members(cohort_id)
     if not members:
         return t(lang, "cs_att_no_members"), None
@@ -236,10 +233,7 @@ async def _attendance_kb(session_id: int, cohort_id: int, lang: str) -> tuple[st
     return "", InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ── COHORT: cohort picker keyboard ─────────────────────────────────────────
-
 def _cohort_picker_kb(cohorts: list, cb_prefix: str) -> InlineKeyboardMarkup:
-    """COHORT_SESSION: Inline keyboard listing cohorts. cb_prefix_{cohort_id} per button."""
     rows = [
         [InlineKeyboardButton(text=name, callback_data=f"{cb_prefix}_{cid}")]
         for cid, name, _ in cohorts
@@ -247,11 +241,29 @@ def _cohort_picker_kb(cohorts: list, cb_prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ══ COHORT: /cohort_create — FSM wizard ═══════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: Check-in score keyboard builder (used in cohorts.py and main.py)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _cohort_checkin_kb(cohort_id: int, member_tg: int) -> InlineKeyboardMarkup:
+    """COHORT_V2: 1-10 score keyboard for cohort member check-in response."""
+    row1 = [
+        InlineKeyboardButton(text=str(i), callback_data=f"cci_{cohort_id}_{member_tg}_{i}")
+        for i in range(1, 6)
+    ]
+    row2 = [
+        InlineKeyboardButton(text=str(i), callback_data=f"cci_{cohort_id}_{member_tg}_{i}")
+        for i in range(6, 11)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[row1, row2])
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT: /cohort_create — FSM wizard
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.message(Command("cohort_create"))
 async def cohort_create_start(message: Message, state: FSMContext):
-    """COHORT: Step 1 — ask for cohort name."""
     lang = await get_user_lang(message.from_user.id)
     await state.set_state(CohortCreateForm.name)
     await message.answer(t(lang, "cohort_ask_name"), reply_markup=cancel_keyboard(lang))
@@ -260,7 +272,6 @@ async def cohort_create_start(message: Message, state: FSMContext):
 
 @router.message(CohortCreateForm.name)
 async def cohort_got_name(message: Message, state: FSMContext):
-    """COHORT: Step 2 — save name, ask for description."""
     lang = await get_user_lang(message.from_user.id)
     await state.update_data(name=message.text.strip())
     await state.set_state(CohortCreateForm.description)
@@ -272,7 +283,6 @@ async def cohort_got_name(message: Message, state: FSMContext):
 
 @router.callback_query(CohortCreateForm.description, F.data == "cohort_skip_desc")
 async def cohort_skip_description(callback: CallbackQuery, state: FSMContext):
-    """COHORT: Step 2 skip."""
     lang = await get_user_lang(callback.from_user.id)
     await state.update_data(description="")
     await state.set_state(CohortCreateForm.max_participants)
@@ -282,7 +292,6 @@ async def cohort_skip_description(callback: CallbackQuery, state: FSMContext):
 
 @router.message(CohortCreateForm.description)
 async def cohort_got_description(message: Message, state: FSMContext):
-    """COHORT: Step 2 — save description, ask for max."""
     lang = await get_user_lang(message.from_user.id)
     await state.update_data(description=message.text.strip())
     await state.set_state(CohortCreateForm.max_participants)
@@ -291,12 +300,10 @@ async def cohort_got_description(message: Message, state: FSMContext):
 
 @router.message(CohortCreateForm.max_participants)
 async def cohort_got_max(message: Message, state: FSMContext):
-    """COHORT: Step 3 — save max participants, ask for type."""
     lang = await get_user_lang(message.from_user.id)
     raw = message.text.strip()
-    if raw == "":
-        max_p = 12
-    else:
+    max_p = 12
+    if raw:
         try:
             max_p = int(raw)
             if max_p < 1:
@@ -311,7 +318,6 @@ async def cohort_got_max(message: Message, state: FSMContext):
 
 @router.callback_query(CohortCreateForm.type_, F.data.startswith("cohort_type_"))
 async def cohort_got_type(callback: CallbackQuery, state: FSMContext):
-    """COHORT: Step 4 — save type, create cohort, show invite link."""
     lang = await get_user_lang(callback.from_user.id)
     uid = callback.from_user.id
     type_map = {
@@ -321,25 +327,27 @@ async def cohort_got_type(callback: CallbackQuery, state: FSMContext):
     }
     type_key, type_display = type_map.get(callback.data, ("group", "Group"))
     data = await state.get_data()
-    name = data["name"]
-    description = data.get("description", "")
-    max_p = data.get("max_participants", 12)
-    cohort_id, token = await _create_cohort(uid, name, description, type_key, max_p)
+    cohort_id, token = await _create_cohort(
+        uid, data["name"], data.get("description", ""),
+        type_key, data.get("max_participants", 12),
+    )
     invite_link = f"https://t.me/{BOT_USERNAME}?start=cohort_{token}"
     await state.clear()
     await callback.answer()
     await callback.message.answer(
-        t(lang, "cohort_created", name=name, type=type_display, max=max_p, link=invite_link),
+        t(lang, "cohort_created", name=data["name"], type=type_display,
+          max=data.get("max_participants", 12), link=invite_link),
         parse_mode="HTML",
     )
-    log.info("COHORT: created cohort_id=%d by user_id=%d token=%s", cohort_id, uid, token)
+    log.info("COHORT: created cohort_id=%d by user_id=%d", cohort_id, uid)
 
 
-# ══ COHORT: /cohorts — list cohorts ════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT: /cohorts — text list
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.message(Command("cohorts"))
 async def cohorts_list(message: Message):
-    """COHORT: Show all cohorts owned by this psychologist."""
     uid = message.from_user.id
     lang = await get_user_lang(uid)
     cohorts = await _get_cohorts_for_psych(uid)
@@ -351,14 +359,14 @@ async def cohorts_list(message: Message):
         count = await _get_member_count(cid)
         lines.append(t(lang, "cohort_list_row", name=name, count=count, max=max_p))
     await message.answer("\n".join(lines))
-    log.info("COHORT: listed cohorts for user_id=%d count=%d", uid, len(cohorts))
 
 
-# ══ COHORT: join confirmation callback ═════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT: join confirmation callback
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data.startswith("cohort_join_"))
 async def cohort_join_confirm(callback: CallbackQuery):
-    """COHORT: User presses 'Join cohort' button from the invite link flow."""
     uid = callback.from_user.id
     token = callback.data[len("cohort_join_"):]
     lang = await get_user_lang(uid)
@@ -379,17 +387,16 @@ async def cohort_join_confirm(callback: CallbackQuery):
     first_name = callback.from_user.first_name or f"user_{uid}"
     await _add_member(cohort_id, uid, first_name)
     await callback.answer()
-    await callback.message.answer(
-        t(lang, "cohort_join_confirm", name=name), parse_mode="HTML"
-    )
+    await callback.message.answer(t(lang, "cohort_join_confirm", name=name), parse_mode="HTML")
     log.info("COHORT: user_id=%d joined cohort_id=%d", uid, cohort_id)
 
 
-# ══ COHORT_SESSION: /cohort_schedule — FSM wizard ══════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_SESSION: /cohort_schedule — FSM
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.message(Command("cohort_schedule"))
 async def cohort_schedule_start(message: Message, state: FSMContext):
-    """COHORT_SESSION: Start cohort session scheduling — pick cohort."""
     uid = message.from_user.id
     lang = await get_user_lang(uid)
     cohorts = await _get_cohorts_for_psych(uid)
@@ -397,15 +404,12 @@ async def cohort_schedule_start(message: Message, state: FSMContext):
         await message.answer(t(lang, "no_cohorts"))
         return
     await state.set_state(CohortScheduleForm.cohort)
-    await message.answer(
-        t(lang, "cs_pick_cohort_schedule"),
-        reply_markup=_cohort_picker_kb(cohorts, "csch_coh"),
-    )
+    await message.answer(t(lang, "cs_pick_cohort_schedule"),
+                         reply_markup=_cohort_picker_kb(cohorts, "csch_coh"))
 
 
 @router.callback_query(CohortScheduleForm.cohort, F.data.startswith("csch_coh_"))
 async def cs_got_cohort(callback: CallbackQuery, state: FSMContext):
-    """COHORT_SESSION: Cohort selected — ask for session number."""
     lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("csch_coh_"):])
     await state.update_data(cohort_id=cohort_id)
@@ -416,11 +420,9 @@ async def cs_got_cohort(callback: CallbackQuery, state: FSMContext):
 
 @router.message(CohortScheduleForm.session_number)
 async def cs_got_session_number(message: Message, state: FSMContext):
-    """COHORT_SESSION: Session number received — ask for date/time."""
     lang = await get_user_lang(message.from_user.id)
-    raw = message.text.strip()
     try:
-        num = int(raw)
+        num = int(message.text.strip())
         if num < 1:
             raise ValueError
     except ValueError:
@@ -433,7 +435,6 @@ async def cs_got_session_number(message: Message, state: FSMContext):
 
 @router.message(CohortScheduleForm.datetime_)
 async def cs_got_datetime(message: Message, state: FSMContext):
-    """COHORT_SESSION: Datetime received — validate, convert to UTC, ask topic."""
     lang = await get_user_lang(message.from_user.id)
     uid = message.from_user.id
     raw = message.text.strip()
@@ -442,7 +443,6 @@ async def cs_got_datetime(message: Message, state: FSMContext):
     except ValueError:
         await message.answer(t(lang, "date_invalid"))
         return
-    # COHORT_SESSION: convert from psychologist's local time to UTC for storage
     _, p_offset = await get_user_timezone(uid)
     scheduled_at_utc = local_to_utc(raw, p_offset)
     await state.update_data(scheduled_at_utc=scheduled_at_utc, scheduled_at_local=raw)
@@ -455,7 +455,6 @@ async def cs_got_datetime(message: Message, state: FSMContext):
 
 @router.callback_query(CohortScheduleForm.topic, F.data == "csch_skip_topic")
 async def cs_skip_topic(callback: CallbackQuery, state: FSMContext):
-    """COHORT_SESSION: Topic skipped — ask for link."""
     lang = await get_user_lang(callback.from_user.id)
     await state.update_data(topic="")
     await state.set_state(CohortScheduleForm.link)
@@ -468,7 +467,6 @@ async def cs_skip_topic(callback: CallbackQuery, state: FSMContext):
 
 @router.message(CohortScheduleForm.topic)
 async def cs_got_topic(message: Message, state: FSMContext):
-    """COHORT_SESSION: Topic received — ask for link."""
     lang = await get_user_lang(message.from_user.id)
     await state.update_data(topic=message.text.strip())
     await state.set_state(CohortScheduleForm.link)
@@ -480,20 +478,17 @@ async def cs_got_topic(message: Message, state: FSMContext):
 
 @router.callback_query(CohortScheduleForm.link, F.data == "csch_skip_link")
 async def cs_skip_link(callback: CallbackQuery, state: FSMContext):
-    """COHORT_SESSION: Link skipped — create session."""
     await state.update_data(link="")
     await _finalize_schedule(callback, state)
 
 
 @router.message(CohortScheduleForm.link)
 async def cs_got_link(message: Message, state: FSMContext):
-    """COHORT_SESSION: Link received — create session."""
     await state.update_data(link=message.text.strip())
     await _finalize_schedule(message, state)
 
 
 async def _finalize_schedule(source, state: FSMContext):
-    """COHORT_SESSION: Create session row and confirm to psychologist."""
     uid = source.from_user.id
     lang = await get_user_lang(uid)
     data = await state.get_data()
@@ -503,60 +498,43 @@ async def _finalize_schedule(source, state: FSMContext):
     scheduled_at_local = data["scheduled_at_local"]
     topic = data.get("topic", "")
     link = data.get("link", "")
-
-    session_id = await _create_cohort_session(
-        cohort_id, session_number, scheduled_at_utc, topic, link
-    )
-
-    # COHORT_SESSION: fetch cohort name for confirmation message
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT name FROM cohorts WHERE id = ?", (cohort_id,))
-        cohort_row = await cur.fetchone()
-    cohort_name = cohort_row[0] if cohort_row else str(cohort_id)
-
+    session_id = await _create_cohort_session(cohort_id, session_number, scheduled_at_utc, topic, link)
+    cohort_name = await _get_cohort_name(cohort_id)
     topic_display = topic if topic else t(lang, "cs_no_topic")
     date_display = datetime.strptime(scheduled_at_local, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
-
     await state.clear()
-    reply_text = t(
-        lang, "cs_created",
-        num=session_number, cohort=cohort_name,
-        date=date_display, topic=topic_display,
-    )
+    reply = t(lang, "cs_created", num=session_number, cohort=cohort_name,
+              date=date_display, topic=topic_display)
     if isinstance(source, CallbackQuery):
         await source.answer()
-        await source.message.answer(reply_text)
+        await source.message.answer(reply)
     else:
-        await source.answer(reply_text)
+        await source.answer(reply)
     log.info("COHORT_SESSION: created session_id=%d cohort_id=%d num=%d by user_id=%d",
              session_id, cohort_id, session_number, uid)
 
 
-# ══ COHORT_SESSION: /cohort_sessions — list sessions ═══════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_SESSION: /cohort_sessions — list sessions
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.message(Command("cohort_sessions"))
 async def cohort_sessions_start(message: Message):
-    """COHORT_SESSION: Show cohort picker to then display sessions list."""
     uid = message.from_user.id
     lang = await get_user_lang(uid)
     cohorts = await _get_cohorts_for_psych(uid)
     if not cohorts:
         await message.answer(t(lang, "no_cohorts"))
         return
-    await message.answer(
-        t(lang, "cs_pick_cohort_list"),
-        reply_markup=_cohort_picker_kb(cohorts, "csl_coh"),
-    )
+    await message.answer(t(lang, "cs_pick_cohort_list"),
+                         reply_markup=_cohort_picker_kb(cohorts, "csl_coh"))
 
 
 @router.callback_query(F.data.startswith("csl_coh_"))
 async def cohort_sessions_show(callback: CallbackQuery):
-    """COHORT_SESSION: Cohort selected — show its sessions list."""
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
     cohort_id = int(callback.data[len("csl_coh_"):])
-
-    # COHORT_SESSION: fetch cohort name and verify ownership
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT name FROM cohorts WHERE id = ? AND psychologist_id = ?",
@@ -567,37 +545,34 @@ async def cohort_sessions_show(callback: CallbackQuery):
         await callback.answer()
         return
     cohort_name = row[0]
-
     sessions = await _get_cohort_sessions(cohort_id)
     await callback.answer()
     if not sessions:
         await callback.message.answer(t(lang, "no_cs"))
         return
-
-    # COHORT_SESSION: display times in psychologist's local timezone
     _, p_offset = await get_user_timezone(uid)
     status_key_map = {
-        "scheduled":  "cs_status_scheduled",
-        "completed":  "cs_status_completed",
-        "cancelled":  "cs_status_cancelled",
+        "scheduled": "cs_status_scheduled",
+        "completed": "cs_status_completed",
+        "cancelled": "cs_status_cancelled",
     }
     lines = [t(lang, "cs_list_title", cohort=cohort_name)]
     for _sid, num, sched_utc, topic, _link, status in sessions:
-        local_dt_str = utc_to_local(sched_utc, p_offset)
-        date_display = datetime.strptime(local_dt_str, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        local_dt = utc_to_local(sched_utc, p_offset)
+        date_display = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
         topic_display = topic if topic else t(lang, "cs_no_topic")
         status_display = t(lang, status_key_map.get(status, "cs_status_scheduled"))
         lines.append(t(lang, "cs_row", num=num, date=date_display,
                        topic=topic_display, status=status_display))
     await callback.message.answer("\n".join(lines))
-    log.info("COHORT_SESSION: sessions listed cohort_id=%d by user_id=%d", cohort_id, uid)
 
 
-# ══ COHORT_SESSION: /cohort_attendance — FSM ══════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_SESSION: /cohort_attendance — FSM + stateless mark callbacks
+# ══════════════════════════════════════════════════════════════════════════
 
 @router.message(Command("cohort_attendance"))
 async def cohort_attendance_start(message: Message, state: FSMContext):
-    """COHORT_SESSION: Start attendance — pick cohort."""
     uid = message.from_user.id
     lang = await get_user_lang(uid)
     cohorts = await _get_cohorts_for_psych(uid)
@@ -605,15 +580,12 @@ async def cohort_attendance_start(message: Message, state: FSMContext):
         await message.answer(t(lang, "no_cohorts"))
         return
     await state.set_state(CohortAttendanceForm.cohort)
-    await message.answer(
-        t(lang, "cs_att_pick_cohort"),
-        reply_markup=_cohort_picker_kb(cohorts, "catt_coh"),
-    )
+    await message.answer(t(lang, "cs_att_pick_cohort"),
+                         reply_markup=_cohort_picker_kb(cohorts, "catt_coh"))
 
 
 @router.callback_query(CohortAttendanceForm.cohort, F.data.startswith("catt_coh_"))
 async def catt_got_cohort(callback: CallbackQuery, state: FSMContext):
-    """COHORT_SESSION: Cohort selected — show session picker."""
     lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("catt_coh_"):])
     sessions = await _get_scheduled_sessions(cohort_id)
@@ -624,9 +596,8 @@ async def catt_got_cohort(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(cohort_id=cohort_id)
     await state.set_state(CohortAttendanceForm.session)
-    # COHORT_SESSION: build session picker keyboard
-    rows = []
     _, p_offset = await get_user_timezone(callback.from_user.id)
+    rows = []
     for sid, num, sched_utc, topic in sessions:
         local_dt = utc_to_local(sched_utc, p_offset)
         date_str = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
@@ -634,15 +605,12 @@ async def catt_got_cohort(callback: CallbackQuery, state: FSMContext):
         if topic:
             label += f" — {topic[:20]}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"catt_ses_{sid}")])
-    await callback.message.answer(
-        t(lang, "cs_att_pick_session"),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
+    await callback.message.answer(t(lang, "cs_att_pick_session"),
+                                  reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @router.callback_query(CohortAttendanceForm.session, F.data.startswith("catt_ses_"))
 async def catt_got_session(callback: CallbackQuery, state: FSMContext):
-    """COHORT_SESSION: Session selected — show attendance keyboard."""
     lang = await get_user_lang(callback.from_user.id)
     session_id = int(callback.data[len("catt_ses_"):])
     row = await _get_cohort_for_session(session_id)
@@ -665,7 +633,6 @@ async def catt_got_session(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("catt_mk_"))
 async def catt_mark(callback: CallbackQuery):
-    """COHORT_SESSION: Mark a member's attendance — save and refresh keyboard."""
     lang = await get_user_lang(callback.from_user.id)
     parts = callback.data[len("catt_mk_"):].split("_")
     if len(parts) != 3:
@@ -675,10 +642,7 @@ async def catt_mark(callback: CallbackQuery):
     if new_status not in ("present", "absent", "pending"):
         await callback.answer()
         return
-
     await _upsert_attendance(session_id, member_id, new_status)
-
-    # COHORT_SESSION: rebuild keyboard with updated status
     row = await _get_cohort_for_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs_att_saved"))
@@ -690,6 +654,616 @@ async def catt_mark(callback: CallbackQuery):
     try:
         await callback.message.edit_text(title, reply_markup=kb)
     except Exception:
-        pass  # COHORT_SESSION: ignore if message unchanged
+        pass
     log.info("COHORT_SESSION: attendance marked session_id=%d member_id=%d status=%s",
              session_id, member_id, new_status)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_coh_list — back to cohort list (from cohort action keyboard)
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "cv2_coh_list")
+async def cv2_coh_list_cb(callback: CallbackQuery):
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, name FROM cohorts WHERE psychologist_id = ? ORDER BY created_at DESC",
+            (uid,),
+        )
+        cohorts = await cur.fetchall()
+    await callback.answer()
+    if not cohorts:
+        await callback.message.answer(t(lang, "no_cohorts"))
+        return
+    rows = [[InlineKeyboardButton(text=name, callback_data=f"cv2_pick_{cid}")]
+            for cid, name in cohorts]
+    await callback.message.answer(t(lang, "cohort_list_title"),
+                                  reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_pick_{cid} — show action keyboard for a specific cohort
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_pick_"))
+async def cv2_pick_cohort(callback: CallbackQuery):
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    cohort_id = int(callback.data[len("cv2_pick_"):])
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT name, status FROM cohorts WHERE id = ? AND psychologist_id = ?",
+            (cohort_id, uid),
+        )
+        row = await cur.fetchone()
+    if not row:
+        await callback.answer()
+        return
+    cohort_name, _ = row
+    await callback.answer()
+    await callback.message.answer(
+        t(lang, "cohort_action_title", name=cohort_name),
+        reply_markup=cohort_action_keyboard(cohort_id, lang),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_mem — members list
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_mem_"))
+async def cv2_members(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_mem_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    members = await _get_active_members(cid)
+    cohort_name = await _get_cohort_name(cid)
+    await callback.answer()
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "cv2_back"), callback_data=f"cv2_pick_{cid}")
+    ]])
+    if not members:
+        await callback.message.answer(t(lang, "cv2_no_members"), reply_markup=back_kb)
+        return
+    lines = [t(lang, "cv2_members_title", cohort=cohort_name, count=len(members))]
+    for _, _, name in members:
+        lines.append(t(lang, "cv2_member_row", name=name))
+    await callback.message.answer("\n".join(lines), reply_markup=back_kb)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_sched — shortcut into CohortScheduleForm.session_number
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_sched_"))
+async def cv2_schedule(callback: CallbackQuery, state: FSMContext):
+    cid = int(callback.data[len("cv2_sched_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    await state.update_data(cohort_id=cid)
+    await state.set_state(CohortScheduleForm.session_number)
+    await callback.answer()
+    await callback.message.answer(t(lang, "cs_ask_session_num"), reply_markup=cancel_keyboard(lang))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_att — shortcut into CohortAttendanceForm.session
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_att_"))
+async def cv2_attendance(callback: CallbackQuery, state: FSMContext):
+    cid = int(callback.data[len("cv2_att_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    sessions = await _get_scheduled_sessions(cid)
+    await callback.answer()
+    if not sessions:
+        await callback.message.answer(t(lang, "cs_att_no_sessions"))
+        return
+    await state.update_data(cohort_id=cid)
+    await state.set_state(CohortAttendanceForm.session)
+    _, p_offset = await get_user_timezone(callback.from_user.id)
+    rows = []
+    for sid, num, sched_utc, topic in sessions:
+        local_dt = utc_to_local(sched_utc, p_offset)
+        date_str = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        label = f"#{num} — {date_str}"
+        if topic:
+            label += f" — {topic[:20]}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"catt_ses_{sid}")])
+    await callback.message.answer(t(lang, "cs_att_pick_session"),
+                                  reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_ci — check-in options menu
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_ci_"))
+async def cv2_checkins_menu(callback: CallbackQuery):
+    # COHORT_V2: only handle cv2_ci_{number} — other cv2_ci* prefixes are distinct
+    cid = int(callback.data[len("cv2_ci_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    cohort_name = await _get_cohort_name(cid)
+    await callback.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cv2_checkin_btn_setup"),
+                              callback_data=f"cv2_cistp_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_checkin_btn_summary"),
+                              callback_data=f"cv2_cisum_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_checkin_btn_send_now"),
+                              callback_data=f"cv2_cisnd_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_back"),
+                              callback_data=f"cv2_pick_{cid}")],
+    ])
+    await callback.message.answer(
+        t(lang, "cv2_checkin_options_title", cohort=cohort_name), reply_markup=kb
+    )
+
+
+# ── Check-in setup FSM ────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cv2_cistp_"))
+async def cv2_checkin_setup_start(callback: CallbackQuery, state: FSMContext):
+    cid = int(callback.data[len("cv2_cistp_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    await state.update_data(cohort_id=cid)
+    await state.set_state(CohortCheckinSetupForm.question)
+    await callback.answer()
+    await callback.message.answer(t(lang, "cv2_checkin_ask_question"),
+                                  reply_markup=cancel_keyboard(lang))
+
+
+@router.message(CohortCheckinSetupForm.question)
+async def cv2_ci_got_question(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    await state.update_data(question=message.text.strip())
+    await state.set_state(CohortCheckinSetupForm.interval)
+    await message.answer(t(lang, "cv2_checkin_ask_interval"), reply_markup=cancel_keyboard(lang))
+
+
+@router.message(CohortCheckinSetupForm.interval)
+async def cv2_ci_got_interval(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    try:
+        interval_h = int(message.text.strip())
+        if interval_h < 1:
+            raise ValueError
+    except ValueError:
+        await message.answer(t(lang, "minutes_invalid"))
+        return
+    data = await state.get_data()
+    cid = data["cohort_id"]
+    question = data["question"]
+    await state.clear()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO cohort_checkin_configs (cohort_id, question, interval_h) VALUES (?, ?, ?) "
+            "ON CONFLICT(cohort_id) DO UPDATE SET question=excluded.question, "
+            "interval_h=excluded.interval_h, enabled=1",
+            (cid, question, interval_h),
+        )
+        await db.commit()
+    await message.answer(t(lang, "cv2_checkin_saved", q=question, h=interval_h))
+    log.info("COHORT_V2: checkin config saved cohort_id=%d interval_h=%d", cid, interval_h)
+
+
+# ── Check-in summary ──────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cv2_cisum_"))
+async def cv2_checkin_summary(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_cisum_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    cohort_name = await _get_cohort_name(cid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT cm.telegram_id, cm.name, COUNT(cc.id), "
+            "COALESCE(ROUND(AVG(cc.score), 1), 0.0) "
+            "FROM cohort_members cm "
+            "LEFT JOIN cohort_checkins cc "
+            "  ON cc.cohort_id = cm.cohort_id AND cc.member_telegram_id = cm.telegram_id "
+            "WHERE cm.cohort_id = ? AND cm.status = 'active' "
+            "GROUP BY cm.telegram_id, cm.name ORDER BY cm.name",
+            (cid,),
+        )
+        rows = await cur.fetchall()
+    await callback.answer()
+    if not rows:
+        await callback.message.answer(t(lang, "cv2_no_checkin_data"))
+        return
+    lines = [t(lang, "cv2_checkin_summary_title", cohort=cohort_name)]
+    for _, name, count, avg in rows:
+        lines.append(t(lang, "cv2_checkin_row", name=name, count=count, avg=avg or 0.0))
+    await callback.message.answer("\n".join(lines))
+
+
+# ── Send check-in now ─────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cv2_cisnd_"))
+async def cv2_checkin_send_now(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_cisnd_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT question FROM cohort_checkin_configs WHERE cohort_id = ?", (cid,)
+        )
+        cfg = await cur.fetchone()
+    if not cfg or not cfg[0]:
+        await callback.answer(t(lang, "cv2_checkin_ask_question"), show_alert=True)
+        return
+    question = cfg[0]
+    members = await _get_active_members(cid)
+    if not members:
+        await callback.answer(t(lang, "cv2_broadcast_no_members"), show_alert=True)
+        return
+    await callback.answer()
+    sent = 0
+    for _, member_tg, _ in members:
+        try:
+            kb = _cohort_checkin_kb(cid, member_tg)
+            await callback.bot.send_message(member_tg, question, reply_markup=kb)
+            sent += 1
+        except Exception as e:
+            log.warning("COHORT_V2: send checkin fail member_tg=%d: %s", member_tg, e)
+    await callback.message.answer(t(lang, "cv2_checkin_sent", count=sent))
+    log.info("COHORT_V2: checkin sent cohort_id=%d sent=%d/%d", cid, sent, len(members))
+
+
+# ── Member check-in response ──────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cci_"))
+async def cci_response(callback: CallbackQuery):
+    """COHORT_V2: Member submits their check-in score."""
+    parts = callback.data[len("cci_"):].split("_")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+    cohort_id, _member_tg, score = int(parts[0]), int(parts[1]), int(parts[2])
+    tg_id = callback.from_user.id
+    lang = await get_cohort_member_lang(tg_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT question FROM cohort_checkin_configs WHERE cohort_id = ?", (cohort_id,)
+        )
+        cfg = await cur.fetchone()
+        question = cfg[0] if cfg else ""
+        await db.execute(
+            "INSERT INTO cohort_checkins "
+            "(cohort_id, member_telegram_id, score, question_text, answered_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (cohort_id, tg_id, score, question, now_str()),
+        )
+        await db.commit()
+    await callback.answer(t(lang, "cv2_checkin_member_thanks"), show_alert=True)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    log.info("COHORT_V2: checkin response cohort_id=%d tg_id=%d score=%d", cohort_id, tg_id, score)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_notes — session note picker
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_notes_"))
+async def cv2_notes(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_notes_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    _, p_offset = await get_user_timezone(callback.from_user.id)
+    sessions = await _get_scheduled_sessions(cid)
+    await callback.answer()
+    if not sessions:
+        await callback.message.answer(t(lang, "cs_att_no_sessions"))
+        return
+    rows = []
+    for sid, num, sched_utc, topic in sessions:
+        local_dt = utc_to_local(sched_utc, p_offset)
+        date_str = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        label = f"#{num} — {date_str}"
+        if topic:
+            label += f" — {topic[:20]}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"cv2_nses_{sid}")])
+    await callback.message.answer(t(lang, "cv2_notes_pick_session"),
+                                  reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data.startswith("cv2_nses_"))
+async def cv2_notes_session(callback: CallbackQuery):
+    session_id = int(callback.data[len("cv2_nses_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    row = await _get_cohort_for_session(session_id)
+    if not row:
+        await callback.answer()
+        return
+    cohort_id, _, session_num = row
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT note_type, text FROM cohort_session_notes "
+            "WHERE session_id = ? AND psychologist_id = ? ORDER BY created_at",
+            (session_id, uid),
+        )
+        notes = await cur.fetchall()
+    await callback.answer()
+    lines = [t(lang, "cv2_notes_title", num=session_num)]
+    if not notes:
+        lines.append(t(lang, "cv2_notes_empty"))
+    else:
+        for note_type, text in notes:
+            key = "cv2_soap_row" if note_type == "soap" else "cv2_note_row"
+            lines.append(t(lang, key, text=text))
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cv2_note_btn_add"),
+                              callback_data=f"cv2_nadd_{session_id}"),
+         InlineKeyboardButton(text=t(lang, "cv2_note_btn_soap"),
+                              callback_data=f"cv2_nsoap_{session_id}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_back"),
+                              callback_data=f"cv2_notes_{cohort_id}")],
+    ])
+    await callback.message.answer("\n".join(lines), reply_markup=kb)
+
+
+# ── Add plain note FSM ────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cv2_nadd_"))
+async def cv2_note_add_start(callback: CallbackQuery, state: FSMContext):
+    session_id = int(callback.data[len("cv2_nadd_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_cohort_for_session(session_id)
+    session_num = row[2] if row else "?"
+    await state.update_data(session_id=session_id, note_type="general")
+    await state.set_state(CohortSessionNoteForm.note_text)
+    await callback.answer()
+    await callback.message.answer(t(lang, "cv2_note_ask", num=session_num),
+                                  reply_markup=cancel_keyboard(lang))
+
+
+@router.message(CohortSessionNoteForm.note_text)
+async def cv2_note_text_got(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    data = await state.get_data()
+    session_id = data["session_id"]
+    note_type = data.get("note_type", "general")
+    text = message.text.strip()
+    await state.clear()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO cohort_session_notes "
+            "(session_id, psychologist_id, note_type, text, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_id, message.from_user.id, note_type, text, now_str()),
+        )
+        await db.commit()
+    row = await _get_cohort_for_session(session_id)
+    session_num = row[2] if row else "?"
+    if note_type == "soap":
+        await message.answer(t(lang, "cv2_soap_saved", num=session_num))
+    else:
+        await message.answer(t(lang, "cv2_note_saved"))
+    log.info("COHORT_V2: session note saved session_id=%d type=%s by user_id=%d",
+             session_id, note_type, message.from_user.id)
+
+
+# ── SOAP note FSM (4 steps) ───────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cv2_nsoap_"))
+async def cv2_soap_start(callback: CallbackQuery, state: FSMContext):
+    session_id = int(callback.data[len("cv2_nsoap_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_cohort_for_session(session_id)
+    session_num = row[2] if row else "?"
+    await state.update_data(session_id=session_id, session_num=session_num)
+    await state.set_state(CohortSOAPNoteForm.s)
+    await callback.answer()
+    await callback.message.answer(t(lang, "cv2_soap_s", num=session_num),
+                                  reply_markup=cancel_keyboard(lang))
+
+
+@router.message(CohortSOAPNoteForm.s)
+async def cv2_soap_s(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    await state.update_data(soap_s=message.text.strip())
+    await state.set_state(CohortSOAPNoteForm.o)
+    await message.answer(t(lang, "cv2_soap_o"), reply_markup=cancel_keyboard(lang))
+
+
+@router.message(CohortSOAPNoteForm.o)
+async def cv2_soap_o(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    await state.update_data(soap_o=message.text.strip())
+    await state.set_state(CohortSOAPNoteForm.a)
+    await message.answer(t(lang, "cv2_soap_a"), reply_markup=cancel_keyboard(lang))
+
+
+@router.message(CohortSOAPNoteForm.a)
+async def cv2_soap_a(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    await state.update_data(soap_a=message.text.strip())
+    await state.set_state(CohortSOAPNoteForm.p)
+    await message.answer(t(lang, "cv2_soap_p"), reply_markup=cancel_keyboard(lang))
+
+
+@router.message(CohortSOAPNoteForm.p)
+async def cv2_soap_p(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    data = await state.get_data()
+    session_id = data["session_id"]
+    session_num = data.get("session_num", "?")
+    text = (
+        f"S: {data.get('soap_s', '')}\n"
+        f"O: {data.get('soap_o', '')}\n"
+        f"A: {data.get('soap_a', '')}\n"
+        f"P: {message.text.strip()}"
+    )
+    await state.clear()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO cohort_session_notes "
+            "(session_id, psychologist_id, note_type, text, created_at) "
+            "VALUES (?, ?, 'soap', ?, ?)",
+            (session_id, message.from_user.id, text, now_str()),
+        )
+        await db.commit()
+    await message.answer(t(lang, "cv2_soap_saved", num=session_num))
+    log.info("COHORT_V2: SOAP note saved session_id=%d by user_id=%d",
+             session_id, message.from_user.id)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_bc — broadcast FSM
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_bc_"))
+async def cv2_broadcast_start(callback: CallbackQuery, state: FSMContext):
+    cid = int(callback.data[len("cv2_bc_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    members = await _get_active_members(cid)
+    if not members:
+        await callback.answer(t(lang, "cv2_broadcast_no_members"), show_alert=True)
+        return
+    cohort_name = await _get_cohort_name(cid)
+    await state.update_data(cohort_id=cid, cohort_name=cohort_name, member_count=len(members))
+    await state.set_state(CohortBroadcastForm.message)
+    await callback.answer()
+    await callback.message.answer(
+        t(lang, "cv2_broadcast_ask", count=len(members), cohort=cohort_name),
+        reply_markup=cancel_keyboard(lang),
+    )
+
+
+@router.message(CohortBroadcastForm.message)
+async def cv2_broadcast_got_message(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    data = await state.get_data()
+    text = message.text.strip()
+    count = data["member_count"]
+    await state.update_data(broadcast_text=text)
+    await state.set_state(CohortBroadcastForm.confirm)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "cv2_broadcast_send"),
+                             callback_data="cv2_bcsend"),
+        InlineKeyboardButton(text=t(lang, "cv2_broadcast_cancel"),
+                             callback_data="cv2_bccancel"),
+    ]])
+    await message.answer(t(lang, "cv2_broadcast_preview", text=text, count=count),
+                         reply_markup=kb)
+
+
+@router.callback_query(CohortBroadcastForm.confirm, F.data == "cv2_bcsend")
+async def cv2_broadcast_send(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_lang(callback.from_user.id)
+    data = await state.get_data()
+    cid = data["cohort_id"]
+    text = data["broadcast_text"]
+    members = await _get_active_members(cid)
+    await state.clear()
+    await callback.answer()
+    sent = 0
+    for _, member_tg, _ in members:
+        try:
+            await callback.bot.send_message(member_tg, text)
+            sent += 1
+        except Exception as e:
+            log.warning("COHORT_V2: broadcast fail member_tg=%d: %s", member_tg, e)
+    await callback.message.answer(t(lang, "cv2_broadcast_done", sent=sent, total=len(members)))
+    log.info("COHORT_V2: broadcast cohort_id=%d sent=%d/%d", cid, sent, len(members))
+
+
+@router.callback_query(CohortBroadcastForm.confirm, F.data == "cv2_bccancel")
+async def cv2_broadcast_cancel_cb(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_lang(callback.from_user.id)
+    await state.clear()
+    await callback.answer()
+    await callback.message.answer(t(lang, "fsm_cancelled"))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_stats — cohort statistics
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_stats_"))
+async def cv2_stats(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_stats_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    cohort_name = await _get_cohort_name(cid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM cohort_members WHERE cohort_id = ? AND status = 'active'", (cid,)
+        )
+        member_count = (await cur.fetchone())[0]
+        cur = await db.execute(
+            "SELECT COUNT(*), SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) "
+            "FROM cohort_sessions WHERE cohort_id = ?", (cid,)
+        )
+        srow = await cur.fetchone()
+        total_sessions = srow[0] or 0
+        completed_sessions = srow[1] or 0
+        att_pct = 0
+        if total_sessions > 0 and member_count > 0:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM cohort_attendance ca "
+                "JOIN cohort_sessions cs ON cs.id = ca.session_id "
+                "WHERE cs.cohort_id = ? AND ca.status = 'present'", (cid,)
+            )
+            present_count = (await cur.fetchone())[0]
+            possible = total_sessions * member_count
+            att_pct = round(present_count * 100 / possible) if possible else 0
+        cur = await db.execute(
+            "SELECT COUNT(*), ROUND(AVG(score), 1) FROM cohort_checkins WHERE cohort_id = ?", (cid,)
+        )
+        cirow = await cur.fetchone()
+        ci_count = cirow[0] or 0
+        ci_avg = cirow[1] or 0.0
+    await callback.answer()
+    lines = [
+        t(lang, "cv2_stats_title", cohort=cohort_name),
+        t(lang, "cv2_stats_members", count=member_count),
+        t(lang, "cv2_stats_sessions", total=total_sessions, completed=completed_sessions),
+        t(lang, "cv2_stats_attendance_pct", pct=att_pct),
+        t(lang, "cv2_stats_checkins", count=ci_count),
+        t(lang, "cv2_stats_avg_score", avg=ci_avg),
+    ]
+    await callback.message.answer("\n".join(lines))
+    log.info("COHORT_V2: stats shown cohort_id=%d by user_id=%d", cid, callback.from_user.id)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_arch — archive cohort (confirm + execute)
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_arch_"))
+async def cv2_archive_confirm(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_arch_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT name, status FROM cohorts WHERE id = ?", (cid,))
+        row = await cur.fetchone()
+    if not row:
+        await callback.answer()
+        return
+    cohort_name, status = row
+    if status == "archived":
+        await callback.answer(t(lang, "cv2_already_archived"), show_alert=True)
+        return
+    await callback.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "cv2_archive_yes"),
+                             callback_data=f"cv2_arcy_{cid}"),
+        InlineKeyboardButton(text=t(lang, "cv2_archive_no"),
+                             callback_data=f"cv2_pick_{cid}"),
+    ]])
+    await callback.message.answer(t(lang, "cv2_archive_confirm", cohort=cohort_name),
+                                  reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("cv2_arcy_"))
+async def cv2_archive_do(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_arcy_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE cohorts SET status = 'archived' WHERE id = ?", (cid,))
+        await db.commit()
+    cohort_name = await _get_cohort_name(cid)
+    await callback.answer()
+    await callback.message.answer(t(lang, "cv2_archived_ok", cohort=cohort_name))
+    log.info("COHORT_V2: cohort_id=%d archived by user_id=%d", cid, callback.from_user.id)

@@ -1,43 +1,75 @@
 ---
 name: Prokhor bot architecture
-description: Key decisions for the Prokhor aiogram 3.x refactor into split-handler button UX
+description: Key decisions for the Prokhor aiogram 3.x split-handler button UX, menu hierarchy, cohort v2, supervision
 ---
 
 ## Project structure
-- `main.py` — entry point only; includes all routers, runs reminder_loop, calls init_db/migrate_db
-- `handlers/` — 8 router modules (menu, clients, sessions, homework, notes, analytics, checkins, settings)
-- `states/` — 4 FSM state files (client_states, session_states, homework_states, note_states)
-- `keyboards.py` — all keyboard builders; exports frozensets like MENU_CLIENTS for text filters
+- `main.py` — entry point; includes all routers, runs reminder_loop (individual + cohort sessions + cohort auto-checkins), calls init_db/migrate_db
+- `handlers/` — router modules: menu, clients, sessions, homework, notes, analytics, checkins, settings, timezone, cohorts, supervision
+- `states/` — FSM state files: client_states, session_states, homework_states, note_states, cohort_states, supervision_states, onboarding_states
+- `keyboards.py` — all keyboard builders + MENU_* frozensets for reply-keyboard routing
 - `translations.py` — single TEXTS dict; t(lang, key, **kwargs) helper
 - `database.py` — all DB helpers
 
+## Hierarchical ReplyKeyboardMarkup menu (added)
+Main menu: 4 buttons (Individual | My Cohorts | Summary | Settings). Each opens a submenu reply keyboard. Back button (any language) returns to main menu.
+- Individual: add client, client list, new note, schedule session, reminders
+- My Cohorts: create cohort, cohort list (inline picker → cohort_action_keyboard)
+- Summary: clients, cohorts (inline picker), statistics/analytics
+- Settings: language, timezone, notifications stub
+
+Builders: `main_menu_keyboard`, `individual_menu_keyboard`, `cohorts_menu_keyboard`, `summary_menu_keyboard`, `settings_menu_keyboard`. All in `keyboards.py`.
+
+**Why:** Hierarchical menus are more discoverable than a flat 6-button row.
+
+**How to apply:** New top-level feature → add `MENU_*` constant in `keyboards.py` via `_all("btn_key")`, add translation in both EN + RU, add handler in `handlers/menu.py`.
+
+## MENU routing: no cross-imports between handler modules
+`handlers/menu.py` imports only from `keyboards.py`, `states/`, and `database.py`. It never imports from other handler modules. To launch a foreign FSM, it sets the first FSM state directly; the owning router handles subsequent steps.
+
+**Why:** Prevents circular imports (`handlers/cohorts.py` → `handlers/menu.py` → `handlers/cohorts.py`).
+
 ## Callback data format (all under 64 bytes)
-- `m_clients`, `m_sessions`, `m_homework`, `m_analytics`, `m_checkins`, `m_settings`, `m_home`
-- `cl_{page}` — client list page; `cc_{id}` — client card; `ca_{id}_{action}` — client action
-- `arc_{page}` — archived list; `ac_{id}` — archived client card
-- `sl_{page}` — session list; `sc_{id}` — session card; `sa_{id}_{action}` — session action
-- `hw_add`, `hw_list`, `an_dash`, `an_alerts`, `ci_send`, `ci_auto`, `ci_recent`
-- `setlang_en`, `setlang_ru`, `checkin_{client_id}_{score}`, `fsm_cancel`, `noop`
-- `s_add`, `c_add`, `c_invite_pick`
+Prefixes are strictly non-overlapping — verify that `startswith(prefix)` can't accidentally match a longer sibling.
+
+- Legacy section nav: `m_clients`, `m_sessions`, `m_home`, etc.
+- Client list/card: `cl_{page}`, `cc_{id}`, `ca_{id}_{action}`, `arc_{page}`, `ac_{id}`
+- Session list/card: `sl_{page}`, `sc_{id}`, `sa_{id}_{action}`
+- Cohort core: `cohort_join_{token}`, `cohort_type_{key}`
+- Cohort session: `csch_*`, `csl_*`, `catt_*`
+- Cohort v2 action: `cv2_pick_{cid}`, `cv2_mem_{cid}`, `cv2_sched_{cid}`, `cv2_att_{cid}`
+- Cohort v2 checkins: `cv2_ci_{cid}`, `cv2_cistp_{cid}`, `cv2_cisum_{cid}`, `cv2_cisnd_{cid}`
+- Cohort v2 notes: `cv2_notes_{cid}`, `cv2_nses_{sid}`, `cv2_nadd_{sid}`, `cv2_nsoap_{sid}`
+- Cohort v2 broadcast: `cv2_bc_{cid}`, `cv2_bcsend`, `cv2_bccancel`
+- Cohort v2 stats/archive: `cv2_stats_{cid}`, `cv2_arch_{cid}`, `cv2_arcy_{cid}`
+- Cohort v2 back: `cv2_coh_list`
+- Member checkin response: `cci_{cohort_id}_{member_tg}_{score}`
+- Supervision: `sv_close_{case_id}`
+- Other: `setlang_{lang}`, `checkin_{client_id}_{score}`, `fsm_cancel`, `noop`, `tz_set_{offset}`, `tz_custom`, `tz_skip`
+
+## Cohort v2 features
+- **Check-ins**: `cohort_checkin_configs` (config per cohort) + `cohort_checkins` (responses). Auto-send via `reminder_loop()` in `main.py` using interval_h. Member scores via `cci_*` callback handled in `handlers/cohorts.py`.
+- **Session notes**: `cohort_session_notes` table. Plain note via `CohortSessionNoteForm` + 4-step SOAP via `CohortSOAPNoteForm`.
+- **Broadcast**: `CohortBroadcastForm` — message text → preview confirm → send to all active members via `bot.send_message`.
+- **Archive**: confirm prompt → `cv2_arcy_{cid}` sets `cohorts.status = 'archived'`. Archived cohorts excluded from auto-checkins.
+- **Stats**: aggregate query (members, sessions, attendance %, check-in count/avg) — no extra tables.
+- All handlers in `handlers/cohorts.py`.
+
+## Supervision logbook
+- Table: `supervision_cases` (alias, issue, hypothesis, intervention, outcome, status=open/closed)
+- 5-step FSM: `SupervisionCaseForm`
+- Commands: `/supervision_case`, `/supervision_logbook`, `/supervision_progress`
+- Close callback: `sv_close_{case_id}`
+- Handler: `handlers/supervision.py`; registered last in `handlers/__init__.py`
 
 ## Client card action dispatch
-Single handler for `ca_{id}_{action}` using `F.data.regexp(r"^ca_\d+_.+$")`.
-Split: `callback.data.split("_", 2)` → [ca, id, action].
+Single handler for `ca_{id}_{action}` using `F.data.regexp`. Split: `callback.data.split("_", 2)`.
 
 ## FSM "from card" vs "from menu"
-- From client card: set `client_id` + `client_name` in FSM data, jump directly to the input state
-- From menu: start at the client_name state, then the input state
-- Separate FSM classes: e.g., `ScheduleSessionFromCardForm` vs `ScheduleSessionForm`
+Separate FSM classes: e.g. `ScheduleSessionFromCardForm` vs `ScheduleSessionForm`. From card: inject client_id/name into FSM data and skip to input state.
 
 ## Bot injection
-Use `bot: Bot` as a parameter in handlers (aiogram 3.x auto-injection). Never use a global BOT_REF.
+Use `bot: Bot` parameter in handlers (aiogram 3.x auto-injects). Never use a global bot ref.
 
-## Menu button filtering
-`keyboards.py` defines `MENU_CLIENTS = _all("btn_clients")` etc. as frozensets of all-language variants.
-Handlers use `F.text.in_(MENU_CLIENTS)` to match regardless of user language.
-
-## states/__init__.py must export everything
-All FSM state classes from all 4 state files must be listed in `states/__init__.py` `__all__`.
-Missing exports cause ImportError in handlers that import from `states`.
-
-**Why:** aiogram 3.x dispatches FSM states globally across all included routers — a state set in one router is handled in another without issue. But the import must succeed.
+## states/__init__.py
+All FSM state classes from all state files must be listed in `states/__init__.py` `__all__`. Missing exports cause ImportError.

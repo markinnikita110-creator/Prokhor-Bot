@@ -28,6 +28,35 @@ def _all(key: str) -> frozenset:
     return frozenset(d[key] for d in TEXTS.values() if key in d)
 
 
+# MENU: top-level main menu buttons
+MENU_INDIVIDUAL   = _all("btn_menu_individual")
+MENU_COHORTS_BTN  = _all("btn_menu_cohorts")
+MENU_SUMMARY      = _all("btn_menu_summary")
+MENU_SETTINGS_BTN = _all("btn_menu_settings")
+MENU_BACK         = _all("btn_menu_back")
+
+# MENU: Individual submenu buttons
+MENU_IND_ADD_CLIENT  = _all("btn_ind_add_client")
+MENU_IND_CLIENT_LIST = _all("btn_ind_client_list")
+MENU_IND_NEW_NOTE    = _all("btn_ind_new_note")
+MENU_IND_SCHEDULE    = _all("btn_ind_schedule")
+MENU_IND_REMINDERS   = _all("btn_ind_reminders")
+
+# MENU: Cohorts submenu buttons
+MENU_COH_CREATE = _all("btn_coh_create")
+MENU_COH_LIST   = _all("btn_coh_list")
+
+# MENU: Summary submenu buttons
+MENU_SUM_CLIENTS = _all("btn_sum_clients")
+MENU_SUM_COHORTS = _all("btn_sum_cohorts")
+MENU_SUM_STATS   = _all("btn_sum_stats")
+
+# MENU: Settings submenu buttons
+MENU_SET_LANGUAGE = _all("btn_set_language")
+MENU_SET_TIMEZONE = _all("btn_set_timezone")
+MENU_SET_NOTIFS   = _all("btn_set_notifs")
+
+# Legacy button sets (still used by inline "Back" callbacks in other handlers)
 MENU_CLIENTS   = _all("btn_clients")
 MENU_SESSIONS  = _all("btn_sessions")
 MENU_HOMEWORK  = _all("btn_homework")
@@ -36,17 +65,69 @@ MENU_CHECKINS  = _all("btn_checkins")
 MENU_SETTINGS  = _all("btn_settings")
 
 
-# ── Persistent bottom keyboard ─────────────────────────────────────────────
+# ── MENU: Hierarchical reply keyboards ────────────────────────────────────
 
 def main_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
+    # MENU: 4-button top-level menu
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=t(lang, "btn_clients")),
-             KeyboardButton(text=t(lang, "btn_sessions"))],
-            [KeyboardButton(text=t(lang, "btn_homework")),
-             KeyboardButton(text=t(lang, "btn_analytics"))],
-            [KeyboardButton(text=t(lang, "btn_checkins")),
-             KeyboardButton(text=t(lang, "btn_settings"))],
+            [KeyboardButton(text=t(lang, "btn_menu_individual")),
+             KeyboardButton(text=t(lang, "btn_menu_cohorts"))],
+            [KeyboardButton(text=t(lang, "btn_menu_summary")),
+             KeyboardButton(text=t(lang, "btn_menu_settings"))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def individual_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
+    # MENU: Individual clients submenu
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=t(lang, "btn_ind_add_client")),
+             KeyboardButton(text=t(lang, "btn_ind_client_list"))],
+            [KeyboardButton(text=t(lang, "btn_ind_new_note")),
+             KeyboardButton(text=t(lang, "btn_ind_schedule"))],
+            [KeyboardButton(text=t(lang, "btn_ind_reminders")),
+             KeyboardButton(text=t(lang, "btn_menu_back"))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def cohorts_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
+    # MENU: Cohorts submenu
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=t(lang, "btn_coh_create")),
+             KeyboardButton(text=t(lang, "btn_coh_list"))],
+            [KeyboardButton(text=t(lang, "btn_menu_back"))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def summary_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
+    # MENU: Summary submenu
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=t(lang, "btn_sum_clients")),
+             KeyboardButton(text=t(lang, "btn_sum_cohorts"))],
+            [KeyboardButton(text=t(lang, "btn_sum_stats")),
+             KeyboardButton(text=t(lang, "btn_menu_back"))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def settings_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
+    # MENU: Settings submenu
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=t(lang, "btn_set_language")),
+             KeyboardButton(text=t(lang, "btn_set_timezone"))],
+            [KeyboardButton(text=t(lang, "btn_set_notifs")),
+             KeyboardButton(text=t(lang, "btn_menu_back"))],
         ],
         resize_keyboard=True,
     )
@@ -275,9 +356,8 @@ def role_select_keyboard(lang: str) -> InlineKeyboardMarkup:
     ])
 
 
-# ── FSM cancel ────────────────────────────────────────────────────────────
+# ── COHORT: type selection ─────────────────────────────────────────────────
 
-# COHORT: type selection keyboard for cohort creation wizard
 def cohort_type_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "btn_cohort_type_course"),
@@ -288,6 +368,26 @@ def cohort_type_keyboard(lang: str) -> InlineKeyboardMarkup:
                               callback_data="cohort_type_supervision")],
     ])
 
+
+# ── COHORT_V2: Cohort action keyboard (inline — shown after cohort pick) ──
+
+def cohort_action_keyboard(cohort_id: int, lang: str) -> InlineKeyboardMarkup:
+    """COHORT_V2: Full action menu for a specific cohort."""
+    cid = cohort_id
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cv2_members"),    callback_data=f"cv2_mem_{cid}"),
+         InlineKeyboardButton(text=t(lang, "cv2_schedule"),   callback_data=f"cv2_sched_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_attendance"), callback_data=f"cv2_att_{cid}"),
+         InlineKeyboardButton(text=t(lang, "cv2_checkins"),   callback_data=f"cv2_ci_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_notes"),      callback_data=f"cv2_notes_{cid}"),
+         InlineKeyboardButton(text=t(lang, "cv2_broadcast"),  callback_data=f"cv2_bc_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_stats"),      callback_data=f"cv2_stats_{cid}"),
+         InlineKeyboardButton(text=t(lang, "cv2_archive"),    callback_data=f"cv2_arch_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_back"),       callback_data="cv2_coh_list")],
+    ])
+
+
+# ── FSM cancel ────────────────────────────────────────────────────────────
 
 def cancel_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
