@@ -146,6 +146,29 @@ async def init_db():
                 status      TEXT DEFAULT 'active',
                 UNIQUE(cohort_id, telegram_id)
             );
+
+            -- COHORT_SESSION: group sessions scheduled by psychologist
+            CREATE TABLE IF NOT EXISTS cohort_sessions (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                cohort_id      INTEGER NOT NULL,
+                session_number INTEGER NOT NULL,
+                scheduled_at   TEXT NOT NULL,
+                topic          TEXT DEFAULT '',
+                link           TEXT DEFAULT '',
+                reminded_24h   INTEGER DEFAULT 0,
+                reminded_1h    INTEGER DEFAULT 0,
+                status         TEXT DEFAULT 'scheduled'
+            );
+
+            -- COHORT_SESSION: per-member attendance for each cohort session
+            CREATE TABLE IF NOT EXISTS cohort_attendance (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                member_id  INTEGER NOT NULL,
+                status     TEXT DEFAULT 'pending',
+                notes      TEXT DEFAULT '',
+                UNIQUE(session_id, member_id)
+            );
         """)
         await db.commit()
 
@@ -363,3 +386,39 @@ async def set_client_lang(telegram_id: int, lang: str):
 
 def make_token() -> str:
     return _make_token()
+
+
+async def get_cohort_member_lang(telegram_id: int) -> str:
+    """COHORT_SESSION: Language for a cohort member — checks clients then psychologists."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT language FROM clients WHERE telegram_id = ?", (telegram_id,)
+        )
+        row = await cur.fetchone()
+        if row and row[0]:
+            return row[0]
+        cur = await db.execute(
+            "SELECT language FROM psychologists WHERE user_id = ?", (telegram_id,)
+        )
+        row = await cur.fetchone()
+        if row and row[0]:
+            return row[0]
+    return "en"
+
+
+async def get_cohort_member_timezone(telegram_id: int) -> tuple[str, int]:
+    """COHORT_SESSION: Timezone for any user — checks clients then psychologists, falls back to UTC."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT timezone, utc_offset FROM clients WHERE telegram_id = ?", (telegram_id,)
+        )
+        row = await cur.fetchone()
+        if row and row[1] is not None:
+            return (row[0] or "UTC", row[1])
+        cur = await db.execute(
+            "SELECT timezone, utc_offset FROM psychologists WHERE user_id = ?", (telegram_id,)
+        )
+        row = await cur.fetchone()
+        if row and row[1] is not None:
+            return (row[0] or "UTC", row[1])
+    return ("UTC", 0)
