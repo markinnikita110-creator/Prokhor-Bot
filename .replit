@@ -32,7 +32,7 @@ task = "shell.exec"
 args = "pip install -q -r requirements.txt && python main.py"
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
