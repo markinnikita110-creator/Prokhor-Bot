@@ -212,6 +212,13 @@ async def init_db():
                 created_at      TEXT,
                 updated_at      TEXT
             );
+
+            -- LEGAL: consent records
+            CREATE TABLE IF NOT EXISTS user_consents (
+                user_id     INTEGER PRIMARY KEY,
+                accepted_at TEXT NOT NULL,
+                version     TEXT NOT NULL DEFAULT '1.0'
+            );
         """)
         await db.commit()
 
