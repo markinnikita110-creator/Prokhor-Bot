@@ -27,7 +27,10 @@ from database import (
     set_user_lang,
     set_user_timezone,
 )
-from handlers.legal import CONSENT_TEXT_RU, consent_keyboard, has_consent
+from handlers.legal import (
+    CONSENT_TEXT_RU, consent_keyboard,
+    check_consent_status, clear_consent_record,
+)
 from keyboards import (
     # MENU: new hierarchical menu constants
     MENU_INDIVIDUAL, MENU_COHORTS_BTN, MENU_SUMMARY, MENU_SETTINGS_BTN, MENU_BACK,
@@ -71,11 +74,19 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
     await state.clear()
     uid = message.from_user.id
 
-    # LEGAL: show consent gate for first-time users
-    if not await has_consent(uid):
+    # LEGAL: show consent gate for new or declined users
+    consent = await check_consent_status(uid)
+    if consent == "declined":
+        # User previously declined — clear old record so they can re-accept
+        await clear_consent_record(uid)
         await message.answer(CONSENT_TEXT_RU, reply_markup=consent_keyboard())
-        log.info("Consent gate shown: user_id=%d", uid)
+        log.info("Consent gate shown (re-consent after decline): user_id=%d", uid)
         return
+    elif consent == "none":
+        await message.answer(CONSENT_TEXT_RU, reply_markup=consent_keyboard())
+        log.info("Consent gate shown (new user): user_id=%d", uid)
+        return
+    # consent == "accepted": fall through to normal bot logic
 
     # COHORT: Deep-link via cohort invite token
     if command.args and command.args.startswith("cohort_"):
