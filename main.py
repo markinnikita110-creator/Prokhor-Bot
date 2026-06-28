@@ -19,6 +19,7 @@ from database import (
 )
 from handlers import routers
 from handlers.clients import set_bot_username
+from handlers.legal import ConsentMiddleware
 from translations import t
 
 logging.basicConfig(
@@ -285,6 +286,10 @@ async def main():
         BotCommand(command="supervision_logbook",  description="Журнал супервизии"),
         BotCommand(command="supervision_progress", description="Открытые случаи"),
     ])
+
+    # Register consent middleware globally — fires before every message/callback
+    dp.message.middleware(ConsentMiddleware())
+    dp.callback_query.middleware(ConsentMiddleware())
 
     for r in routers:
         dp.include_router(r)

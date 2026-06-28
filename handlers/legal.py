@@ -1,15 +1,24 @@
-"""Legal handlers: consent gate, /privacy, /delete_my_data, /terms."""
+"""Legal handlers: consent gate, /privacy, /delete_my_data, /terms.
+
+Public API used by other modules:
+  - CONSENT_TEXT_RU, consent_keyboard  → imported by handlers/menu.py
+  - check_consent_status(uid)          → 'accepted' | 'declined' | 'none'
+  - clear_consent_record(uid)          → deletes any existing record
+  - ConsentMiddleware                  → registered on dp in main.py
+"""
 
 import logging
 import os
 from datetime import datetime, timezone as _tz
+from typing import Any, Awaitable, Callable
 
 import aiosqlite
-from aiogram import F, Router
+from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
-    CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+    CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup,
+    Message, TelegramObject,
 )
 
 from database import DB_PATH, ensure_user, get_user_lang
@@ -21,6 +30,15 @@ router = Router()
 log = logging.getLogger(__name__)
 
 CONSENT_VERSION = "1.0"
+
+# Commands and callbacks that never require consent check
+_EXEMPT_COMMANDS  = frozenset({"start", "privacy", "terms"})
+_EXEMPT_CALLBACKS = frozenset({"legal_accept", "legal_decline"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Static text
+# ─────────────────────────────────────────────────────────────────────────────
 
 CONSENT_TEXT_RU = (
     "👋 Добро пожаловать в Прохора!\n\n"
@@ -53,22 +71,35 @@ PRIVACY_TEXT_RU = (
     "Версия 1.0"
 )
 
+_BLOCKED_MSG = (
+    "Для работы со мной необходимо принять условия. "
+    "Напишите /start"
+)
 
-# ── DB helpers ──────────────────────────────────────────────────────────────
 
-async def has_consent(user_id: int) -> bool:
+# ─────────────────────────────────────────────────────────────────────────────
+# DB helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def check_consent_status(user_id: int) -> str:
+    """Return 'accepted', 'declined', or 'none'."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute(
-                "SELECT 1 FROM user_consents WHERE user_id = ?", (user_id,)
+                "SELECT version FROM user_consents WHERE user_id = ?",
+                (user_id,),
             )
-            return (await cur.fetchone()) is not None
+            row = await cur.fetchone()
+        if row is None:
+            return "none"
+        return "accepted" if row[0] == CONSENT_VERSION else "declined"
     except Exception as e:
-        log.error("has_consent error: %s", e)
-        return False
+        log.error("check_consent_status error user_id=%d: %s", user_id, e)
+        return "none"
 
 
 async def save_consent(user_id: int) -> None:
+    """Save accepted consent (version=1.0)."""
     accepted_at = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -80,10 +111,101 @@ async def save_consent(user_id: int) -> None:
             await db.commit()
         log.info("Consent saved: user_id=%d version=%s", user_id, CONSENT_VERSION)
     except Exception as e:
-        log.error("save_consent error: %s", e)
+        log.error("save_consent error user_id=%d: %s", user_id, e)
 
 
-# ── Keyboard helpers ────────────────────────────────────────────────────────
+async def save_decline(user_id: int) -> None:
+    """Record that the user declined consent (version=declined)."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO user_consents (user_id, accepted_at, version) "
+                "VALUES (?, ?, ?)",
+                (user_id, "declined", "declined"),
+            )
+            await db.commit()
+        log.info("Consent declined and recorded: user_id=%d", user_id)
+    except Exception as e:
+        log.error("save_decline error user_id=%d: %s", user_id, e)
+
+
+async def clear_consent_record(user_id: int) -> None:
+    """Delete any existing consent/decline record so the user can re-accept."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "DELETE FROM user_consents WHERE user_id = ?", (user_id,)
+            )
+            await db.commit()
+        log.info("Consent record cleared: user_id=%d", user_id)
+    except Exception as e:
+        log.error("clear_consent_record error user_id=%d: %s", user_id, e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Consent middleware — blocks ALL handlers if user hasn't accepted
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ConsentMiddleware(BaseMiddleware):
+    """Outer middleware registered on dp.message and dp.callback_query.
+
+    Passes through:
+      - exempt commands (/start, /privacy, /terms)
+      - exempt callbacks (legal_accept, legal_decline)
+      - users with accepted consent
+
+    Blocks (with a prompt to /start):
+      - users who declined
+      - users with no consent record
+    """
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        uid: int | None = None
+
+        if isinstance(event, Message):
+            if not event.from_user:
+                return await handler(event, data)
+            uid = event.from_user.id
+            # Exempt commands
+            if event.text:
+                raw = event.text.lstrip("/").split("@")[0].split()[0].lower()
+                if event.text.startswith("/") and raw in _EXEMPT_COMMANDS:
+                    return await handler(event, data)
+
+        elif isinstance(event, CallbackQuery):
+            if not event.from_user:
+                return await handler(event, data)
+            uid = event.from_user.id
+            # Exempt consent-gate callbacks
+            if event.data and event.data in _EXEMPT_CALLBACKS:
+                return await handler(event, data)
+
+        else:
+            return await handler(event, data)
+
+        if uid is None:
+            return await handler(event, data)
+
+        status = await check_consent_status(uid)
+        if status == "accepted":
+            return await handler(event, data)
+
+        # User hasn't accepted — block and prompt
+        if isinstance(event, Message):
+            await event.answer(_BLOCKED_MSG)
+        elif isinstance(event, CallbackQuery):
+            await event.answer(_BLOCKED_MSG, show_alert=True)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Keyboard helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 def consent_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -99,13 +221,14 @@ def delete_confirm_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
-# ── Consent callbacks ───────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Consent callbacks
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "legal_accept")
 async def legal_accept_cb(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
     await callback.answer("✅ Принято")
-    # Always clear any stale FSM state first
     await state.clear()
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -136,19 +259,23 @@ async def legal_accept_cb(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "legal_decline")
 async def legal_decline_cb(callback: CallbackQuery):
+    uid = callback.from_user.id
     await callback.answer()
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+    await save_decline(uid)
     await callback.message.answer(
-        "❌ Прохор не может работать без вашего согласия.\n"
+        "Без согласия я не могу работать.\n"
         "Если передумаете — напишите /start."
     )
-    log.info("Consent declined: user_id=%d", callback.from_user.id)
+    log.info("Consent declined: user_id=%d", uid)
 
 
-# ── /privacy ────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# /privacy
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.message(Command("privacy"))
 async def cmd_privacy(message: Message):
@@ -165,7 +292,9 @@ async def cmd_privacy(message: Message):
         log.warning("Privacy PDF not found: %s", pdf_path)
 
 
-# ── /terms ──────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# /terms
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.message(Command("terms"))
 async def cmd_terms(message: Message):
@@ -183,7 +312,9 @@ async def cmd_terms(message: Message):
         )
 
 
-# ── /delete_my_data ─────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# /delete_my_data
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.message(Command("delete_my_data"))
 async def cmd_delete_my_data(message: Message):
@@ -211,7 +342,6 @@ async def legal_delete_confirm_cb(callback: CallbackQuery, state: FSMContext):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
             tables = [row[0] for row in await cur.fetchall()]
-
             for table in tables:
                 try:
                     await db.execute(
@@ -220,7 +350,6 @@ async def legal_delete_confirm_cb(callback: CallbackQuery, state: FSMContext):
                     deleted_from.append(table)
                 except Exception:
                     skipped.append(table)
-
             await db.commit()
         await state.clear()
         log.info(
@@ -233,7 +362,9 @@ async def legal_delete_confirm_cb(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         log.error("delete_my_data error: %s", e)
-        await callback.message.answer("⚠️ Произошла ошибка при удалении данных. Попробуйте позже.")
+        await callback.message.answer(
+            "⚠️ Произошла ошибка при удалении данных. Попробуйте позже."
+        )
 
 
 @router.callback_query(F.data == "legal_delete_cancel")
