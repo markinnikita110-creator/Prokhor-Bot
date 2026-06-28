@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import aiosqlite
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 
 from database import (
     DB_PATH, get_client_lang, get_client_timezone, get_user_lang,
@@ -275,6 +275,16 @@ async def main():
     me = await bot.get_me()
     set_bot_username(me.username or "")
     log.info("Bot started: @%s", me.username)
+
+    await bot.set_my_commands([
+        BotCommand(command="start",           description="Главное меню"),
+        BotCommand(command="privacy",         description="Политика конфиденциальности"),
+        BotCommand(command="terms",           description="Условия использования"),
+        BotCommand(command="delete_my_data",  description="Удалить все мои данные"),
+        BotCommand(command="supervision_case",     description="Новый случай супервизии"),
+        BotCommand(command="supervision_logbook",  description="Журнал супервизии"),
+        BotCommand(command="supervision_progress", description="Открытые случаи"),
+    ])
 
     for r in routers:
         dp.include_router(r)

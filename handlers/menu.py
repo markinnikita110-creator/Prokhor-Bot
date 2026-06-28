@@ -27,6 +27,7 @@ from database import (
     set_user_lang,
     set_user_timezone,
 )
+from handlers.legal import CONSENT_TEXT_RU, consent_keyboard, has_consent
 from keyboards import (
     # MENU: new hierarchical menu constants
     MENU_INDIVIDUAL, MENU_COHORTS_BTN, MENU_SUMMARY, MENU_SETTINGS_BTN, MENU_BACK,
@@ -69,6 +70,12 @@ log = logging.getLogger(__name__)
 async def start_handler(message: Message, command: CommandObject, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
+
+    # LEGAL: show consent gate for first-time users
+    if not await has_consent(uid):
+        await message.answer(CONSENT_TEXT_RU, reply_markup=consent_keyboard())
+        log.info("Consent gate shown: user_id=%d", uid)
+        return
 
     # COHORT: Deep-link via cohort invite token
     if command.args and command.args.startswith("cohort_"):
