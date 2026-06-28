@@ -244,11 +244,15 @@ async def language_cmd(message: Message):
 
 @router.callback_query(OnboardingForm.language, F.data.startswith("setlang_"))
 async def onboarding_setlang(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     lang = callback.data.split("_")[1]
     uid = callback.from_user.id
     await set_user_lang(uid, lang)
     await state.set_state(OnboardingForm.timezone)
-    await callback.answer()
     await callback.message.answer(
         t(lang, "ask_timezone_onboarding"),
         reply_markup=timezone_keyboard(lang, show_skip=True),
@@ -321,23 +325,51 @@ async def onboarding_tz_skip(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("setlang_"))
 async def setlang_callback(callback: CallbackQuery):
-    lang = callback.data.split("_")[1]
-    uid = callback.from_user.id
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT 1 FROM psychologists WHERE user_id = ?", (uid,))
-        is_psych = await cur.fetchone()
-        cur = await db.execute("SELECT 1 FROM clients WHERE telegram_id = ?", (uid,))
-        is_client = await cur.fetchone()
-    if is_psych:
-        await set_user_lang(uid, lang)
-        await callback.answer()
-        await callback.message.answer(t(lang, "language_saved"),
-                                      reply_markup=main_menu_keyboard(lang))
-    if is_client:
-        await set_client_lang(uid, lang)
-        await callback.answer()
-        if not is_psych:
+    # Always answer immediately so the button stops spinning
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    lang = callback.data.split("_")[1]   # "en" or "ru"
+    uid  = callback.from_user.id
+
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM psychologists WHERE user_id = ?", (uid,))
+            is_psych = await cur.fetchone()
+            cur = await db.execute(
+                "SELECT 1 FROM clients WHERE telegram_id = ?", (uid,))
+            is_client = await cur.fetchone()
+
+        if is_psych:
+            await set_user_lang(uid, lang)
+
+        if is_client:
+            await set_client_lang(uid, lang)
+
+        if is_psych:
+            await callback.message.answer(
+                t(lang, "language_saved"),
+                reply_markup=main_menu_keyboard(lang),
+            )
+        elif is_client:
             await callback.message.answer(t(lang, "language_saved"))
+        else:
+            # User record not found yet — still acknowledge the change
+            log.warning("setlang_callback: user_id=%d not in psychologists or clients", uid)
+            await callback.message.answer(
+                t(lang, "language_saved"),
+                reply_markup=main_menu_keyboard(lang),
+            )
+
+        log.info("Language set: user_id=%d lang=%s psych=%s client=%s",
+                 uid, lang, bool(is_psych), bool(is_client))
+    except Exception as e:
+        log.error("setlang_callback error user_id=%d: %s", uid, e)
+        await callback.message.answer("⚠️ Не удалось сохранить язык. Попробуйте ещё раз.")
 
 
 # ── FSM cancel (global) ────────────────────────────────────────────────────
