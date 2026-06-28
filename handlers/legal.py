@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 CONSENT_VERSION = "1.0"
 
 # Commands and callbacks that never require consent check
-_EXEMPT_COMMANDS  = frozenset({"start", "privacy", "terms"})
+_EXEMPT_COMMANDS  = frozenset({"start", "privacy", "terms", "consent"})
 _EXEMPT_CALLBACKS = frozenset({"legal_accept", "legal_decline"})
 
 
@@ -273,6 +273,25 @@ async def legal_decline_cb(callback: CallbackQuery):
     log.info("Consent declined: user_id=%d", uid)
 
 
+_FALLBACK_MSG = "📄 Документ временно недоступен.\nНапишите нам: @nick_mnm"
+
+
+async def _send_document(message: Message, path: str, caption: str, label: str) -> None:
+    """Send a PDF document; fall back gracefully if the file is missing."""
+    if os.path.exists(path):
+        try:
+            await message.answer_document(
+                FSInputFile(path),
+                caption=caption,
+            )
+        except Exception as e:
+            log.error("%s PDF send error: %s", label, e)
+            await message.answer(_FALLBACK_MSG)
+    else:
+        log.warning("%s PDF not found: %s", label, path)
+        await message.answer(_FALLBACK_MSG)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # /privacy
 # ─────────────────────────────────────────────────────────────────────────────
@@ -280,16 +299,12 @@ async def legal_decline_cb(callback: CallbackQuery):
 @router.message(Command("privacy"))
 async def cmd_privacy(message: Message):
     await message.answer(PRIVACY_TEXT_RU)
-    pdf_path = "./documents/privacy_policy.pdf"
-    if os.path.exists(pdf_path):
-        try:
-            await message.answer_document(
-                FSInputFile(pdf_path, filename="privacy_policy.pdf")
-            )
-        except Exception as e:
-            log.error("Privacy PDF send error: %s", e)
-    else:
-        log.warning("Privacy PDF not found: %s", pdf_path)
+    await _send_document(
+        message,
+        path="documents/privacy_policy.pdf",
+        caption="📄 Политика конфиденциальности Прохора",
+        label="Privacy",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,18 +313,28 @@ async def cmd_privacy(message: Message):
 
 @router.message(Command("terms"))
 async def cmd_terms(message: Message):
-    pdf_path = "./documents/terms.pdf"
-    if os.path.exists(pdf_path):
-        try:
-            await message.answer_document(
-                FSInputFile(pdf_path, filename="terms.pdf")
-            )
-        except Exception as e:
-            log.error("Terms PDF send error: %s", e)
-    else:
-        await message.answer(
-            "📄 Условия использования будут доступны в ближайшее время."
-        )
+    await message.answer("📋 Пользовательское соглашение (оферта)")
+    await _send_document(
+        message,
+        path="documents/terms.pdf",
+        caption="📄 Пользовательское соглашение Прохора",
+        label="Terms",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /consent
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.message(Command("consent"))
+async def cmd_consent(message: Message):
+    await message.answer("✍️ Согласие на обработку персональных данных")
+    await _send_document(
+        message,
+        path="documents/consent.pdf",
+        caption="📄 Согласие на обработку ПД",
+        label="Consent",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

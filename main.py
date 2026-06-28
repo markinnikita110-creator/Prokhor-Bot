@@ -281,6 +281,7 @@ async def main():
         BotCommand(command="start",           description="Главное меню"),
         BotCommand(command="privacy",         description="Политика конфиденциальности"),
         BotCommand(command="terms",           description="Условия использования"),
+        BotCommand(command="consent",         description="Согласие на обработку ПД"),
         BotCommand(command="delete_my_data",  description="Удалить все мои данные"),
         BotCommand(command="supervision_case",     description="Новый случай супервизии"),
         BotCommand(command="supervision_logbook",  description="Журнал супервизии"),
