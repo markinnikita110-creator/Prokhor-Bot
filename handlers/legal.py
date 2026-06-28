@@ -104,14 +104,22 @@ def delete_confirm_keyboard() -> InlineKeyboardMarkup:
 @router.callback_query(F.data == "legal_accept")
 async def legal_accept_cb(callback: CallbackQuery, state: FSMContext):
     uid = callback.from_user.id
-    await save_consent(uid)
     await callback.answer("✅ Принято")
+    # Always clear any stale FSM state first
+    await state.clear()
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
 
-    is_new = await ensure_user(uid, callback.from_user.username or "")
+    await save_consent(uid)
+
+    try:
+        is_new = await ensure_user(uid, callback.from_user.username or "")
+    except Exception as e:
+        log.error("legal_accept_cb ensure_user failed user_id=%d: %s", uid, e)
+        is_new = False
+
     if is_new:
         await state.set_state(OnboardingForm.language)
         await callback.message.answer(
@@ -123,7 +131,7 @@ async def legal_accept_cb(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             t(lang, "welcome"), reply_markup=main_menu_keyboard(lang)
         )
-        log.info("Consent accepted → main menu: user_id=%d", uid)
+        log.info("Consent accepted → main menu: user_id=%d lang=%s", uid, lang)
 
 
 @router.callback_query(F.data == "legal_decline")

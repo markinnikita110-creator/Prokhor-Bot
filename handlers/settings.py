@@ -28,12 +28,7 @@ async def settings_section(callback: CallbackQuery):
 async def settings_language(callback: CallbackQuery):
     lang = await get_user_lang(callback.from_user.id)
     await callback.answer()
-    try:
-        await callback.message.edit_text(t(lang, "language_select"),
-                                         reply_markup=lang_keyboard())
-    except Exception:
-        await callback.message.answer(t(lang, "language_select"),
-                                      reply_markup=lang_keyboard())
+    await callback.message.answer(t(lang, "language_select"), reply_markup=lang_keyboard())
 
 
 @router.callback_query(F.data == "st_tz")
