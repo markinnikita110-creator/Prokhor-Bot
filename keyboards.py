@@ -368,6 +368,18 @@ def cohort_type_keyboard(lang: str) -> InlineKeyboardMarkup:
     ])
 
 
+# ── COHORT_V2: Members screen keyboard ────────────────────────────────────
+
+def cohort_members_keyboard(cohort_id: int, lang: str) -> InlineKeyboardMarkup:
+    """COHORT_V2: Action buttons shown below the members list."""
+    cid = cohort_id
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cv2_btn_add_member"), callback_data=f"cv2_addmem_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_btn_invite"),     callback_data=f"cv2_invite_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_back"),           callback_data=f"cv2_pick_{cid}")],
+    ])
+
+
 # ── COHORT_V2: Cohort action keyboard (inline — shown after cohort pick) ──
 
 def cohort_action_keyboard(cohort_id: int, lang: str) -> InlineKeyboardMarkup:

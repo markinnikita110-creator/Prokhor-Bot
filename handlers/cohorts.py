@@ -34,12 +34,14 @@ from keyboards import (
     cohort_action_keyboard,
     cohort_clear_field_keyboard,
     cohort_confirm_keyboard,
+    cohort_members_keyboard,
     cohort_recurring_days_keyboard,
     cohort_session_detail_keyboard,
     cohort_session_list_keyboard,
     cohort_type_keyboard,
 )
 from states.cohort_states import (
+    CohortAddMemberManualForm,
     CohortAttendanceForm,
     CohortBroadcastForm,
     CohortCheckinSetupForm,
@@ -233,6 +235,23 @@ async def _get_cohort_name(cohort_id: int) -> str:
         cur = await db.execute("SELECT name FROM cohorts WHERE id = ?", (cohort_id,))
         row = await cur.fetchone()
     return row[0] if row else str(cohort_id)
+
+
+async def _get_cohort_invite_token(cohort_id: int) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT invite_token, name FROM cohorts WHERE id = ?", (cohort_id,))
+        row = await cur.fetchone()
+    return (row[0], row[1]) if row else (None, "")
+
+
+async def _get_next_manual_id(cohort_id: int) -> int:
+    """Return a unique negative telegram_id for a manually-added member."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT MIN(telegram_id) FROM cohort_members WHERE cohort_id = ?", (cohort_id,))
+        row = await cur.fetchone()
+        min_id = row[0] if (row and row[0] is not None) else 0
+    return min(min_id, 0) - 1
 
 
 async def _verify_cohort_owner(cohort_id: int, uid: int) -> str | None:
@@ -1088,23 +1107,99 @@ async def cv2_pick_cohort(callback: CallbackQuery):
 # COHORT_V2: cv2_mem — members list
 # ══════════════════════════════════════════════════════════════════════════
 
+async def _render_members_text(cid: int, lang: str) -> str:
+    """Build the formatted members list text."""
+    cohort_name = await _get_cohort_name(cid)
+    members = await _get_active_members(cid)
+    if not members:
+        return (t(lang, "cv2_no_members") + "\n\n"
+                + t(lang, "cv2_members_empty_note"))
+    lines = [t(lang, "cv2_members_title", cohort=cohort_name, count=len(members))]
+    for _, tg_id, name in members:
+        if tg_id and tg_id > 0:
+            lines.append(t(lang, "cv2_member_row_tg", name=name, tg_id=tg_id))
+        else:
+            lines.append(t(lang, "cv2_member_row_manual", name=name))
+    return "\n".join(lines)
+
+
 @router.callback_query(F.data.startswith("cv2_mem_"))
-async def cv2_members(callback: CallbackQuery):
+async def cv2_members(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     cid = int(callback.data[len("cv2_mem_"):])
     lang = await get_user_lang(callback.from_user.id)
-    members = await _get_active_members(cid)
-    cohort_name = await _get_cohort_name(cid)
+    text = await _render_members_text(cid, lang)
+    kb = cohort_members_keyboard(cid, lang)
     await callback.answer()
-    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "cv2_back"), callback_data=f"cv2_pick_{cid}")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_addmem — add member manually (FSM)
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_addmem_"))
+async def cv2_addmem_start(callback: CallbackQuery, state: FSMContext):
+    cid = int(callback.data[len("cv2_addmem_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    await state.set_state(CohortAddMemberManualForm.name)
+    await state.update_data(cohort_id=cid)
+    await callback.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "cv2_back"), callback_data=f"cv2_mem_{cid}")
     ]])
-    if not members:
-        await callback.message.answer(t(lang, "cv2_no_members"), reply_markup=back_kb)
+    await callback.message.answer(t(lang, "cv2_add_member_ask"), reply_markup=kb)
+
+
+@router.message(CohortAddMemberManualForm.name)
+async def cv2_addmem_got_name(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    data = await state.get_data()
+    cid = data["cohort_id"]
+    name = message.text.strip()
+    if not name:
+        await message.answer(t(lang, "cv2_add_member_ask"))
         return
-    lines = [t(lang, "cv2_members_title", cohort=cohort_name, count=len(members))]
-    for _, _, name in members:
-        lines.append(t(lang, "cv2_member_row", name=name))
-    await callback.message.answer("\n".join(lines), reply_markup=back_kb)
+    manual_tg_id = await _get_next_manual_id(cid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO cohort_members (cohort_id, telegram_id, name, joined_at, status) "
+            "VALUES (?, ?, ?, ?, 'active')",
+            (cid, manual_tg_id, name, now_str()),
+        )
+        await db.commit()
+    await state.clear()
+    text = await _render_members_text(cid, lang)
+    kb = cohort_members_keyboard(cid, lang)
+    await message.answer(t(lang, "cv2_member_added", name=name))
+    await message.answer(text, reply_markup=kb)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COHORT_V2: cv2_invite — show invite link
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("cv2_invite_"))
+async def cv2_invite(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_invite_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    token, cohort_name = await _get_cohort_invite_token(cid)
+    await callback.answer()
+    if not token:
+        await callback.message.answer(t(lang, "cv2_no_members"))
+        return
+    link = f"https://t.me/{BOT_USERNAME}?start=join_{token}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "cv2_back"), callback_data=f"cv2_mem_{cid}")
+    ]])
+    await callback.message.answer(
+        t(lang, "cv2_invite_text", cohort=cohort_name, link=link),
+        reply_markup=kb,
+        disable_web_page_preview=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════

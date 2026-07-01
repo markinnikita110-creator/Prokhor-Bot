@@ -389,9 +389,16 @@ TEXTS = {
         "cohort_action_title": "📋 {name}:",
 
         # Members list
-        "cv2_members_title":   "Members of «{cohort}» ({count}):",
-        "cv2_member_row":      "• {name}",
-        "cv2_no_members":      "No members in this cohort yet.",
+        "cv2_members_title":      "👥 Members of «{cohort}» — {count}:",
+        "cv2_member_row_tg":      "• {name}  [TG {tg_id}]",
+        "cv2_member_row_manual":  "• {name}  👤",
+        "cv2_no_members":         "No members yet.",
+        "cv2_members_empty_note": "Add someone manually or share the invite link so clients can join themselves.",
+        "cv2_btn_add_member":     "➕ Add manually",
+        "cv2_btn_invite":         "🔗 Invite link",
+        "cv2_add_member_ask":     "Enter the new member's name:",
+        "cv2_member_added":       "✅ {name} added to the cohort.",
+        "cv2_invite_text":        "🔗 Invite link for «{cohort}»:\n\n{link}\n\nSend this to your clients — they tap it in Telegram and join automatically.",
 
         # Broadcast
         "cv2_broadcast_ask":        "Enter the message to send to all {count} member(s) of «{cohort}»:",
@@ -904,9 +911,16 @@ TEXTS = {
         "cohort_action_title": "📋 {name}:",
 
         # Список участников
-        "cv2_members_title":   "Участники «{cohort}» ({count}):",
-        "cv2_member_row":      "• {name}",
-        "cv2_no_members":      "В этой когорте пока нет участников.",
+        "cv2_members_title":      "👥 Участники «{cohort}» — {count}:",
+        "cv2_member_row_tg":      "• {name}  [TG {tg_id}]",
+        "cv2_member_row_manual":  "• {name}  👤",
+        "cv2_no_members":         "Участников пока нет.",
+        "cv2_members_empty_note": "Добавьте вручную или поделитесь ссылкой-приглашением, чтобы клиенты вступили сами.",
+        "cv2_btn_add_member":     "➕ Добавить вручную",
+        "cv2_btn_invite":         "🔗 Пригласительная ссылка",
+        "cv2_add_member_ask":     "Введите имя нового участника:",
+        "cv2_member_added":       "✅ {name} добавлен в когорту.",
+        "cv2_invite_text":        "🔗 Ссылка-приглашение для «{cohort}»:\n\n{link}\n\nОтправьте её клиентам — они нажмут в Telegram и автоматически вступят в группу.",
 
         # Рассылка
         "cv2_broadcast_ask":        "Введите сообщение для рассылки всем {count} участникам «{cohort}»:",

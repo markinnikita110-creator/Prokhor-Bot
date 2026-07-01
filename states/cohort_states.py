@@ -63,3 +63,8 @@ class CohortSOAPNoteForm(StatesGroup):
     o = State()
     a = State()
     p = State()
+
+
+# COHORT_V2: FSM for manually adding a member by name
+class CohortAddMemberManualForm(StatesGroup):
+    name = State()
