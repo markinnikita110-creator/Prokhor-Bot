@@ -133,7 +133,8 @@ async def init_db():
                 end_date         TEXT,
                 status           TEXT DEFAULT 'active',
                 created_at       TEXT,
-                invite_token     TEXT UNIQUE
+                invite_token     TEXT UNIQUE,
+                recurring_paused INTEGER DEFAULT 0
             );
 
             -- COHORT: participants who joined a cohort via invite link
@@ -269,6 +270,12 @@ async def migrate_db():
         ]:
             if col not in cohort_session_cols:
                 await db.execute(f"ALTER TABLE cohort_sessions ADD COLUMN {col} {definition}")
+
+        # RECURRING: cohorts — per-cohort pause switch for the recurrence rule
+        cur = await db.execute("PRAGMA table_info(cohorts)")
+        cohort_cols = {row[1] for row in await cur.fetchall()}
+        if "recurring_paused" not in cohort_cols:
+            await db.execute("ALTER TABLE cohorts ADD COLUMN recurring_paused INTEGER DEFAULT 0")
 
         await db.commit()
 

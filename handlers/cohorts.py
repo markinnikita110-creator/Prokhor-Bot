@@ -32,7 +32,11 @@ from database import (
 from keyboards import (
     cancel_keyboard,
     cohort_action_keyboard,
+    cohort_clear_field_keyboard,
+    cohort_confirm_keyboard,
     cohort_recurring_days_keyboard,
+    cohort_session_detail_keyboard,
+    cohort_session_list_keyboard,
     cohort_type_keyboard,
 )
 from states.cohort_states import (
@@ -42,6 +46,7 @@ from states.cohort_states import (
     CohortCreateForm,
     CohortRecurringScheduleForm,
     CohortScheduleForm,
+    CohortSessionEditForm,
     CohortSessionNoteForm,
     CohortSOAPNoteForm,
 )
@@ -228,6 +233,89 @@ async def _get_cohort_name(cohort_id: int) -> str:
         cur = await db.execute("SELECT name FROM cohorts WHERE id = ?", (cohort_id,))
         row = await cur.fetchone()
     return row[0] if row else str(cohort_id)
+
+
+async def _verify_cohort_owner(cohort_id: int, uid: int) -> str | None:
+    """SESSIONS: returns the cohort name if `uid` is its owning psychologist, else None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT name FROM cohorts WHERE id = ? AND psychologist_id = ?", (cohort_id, uid),
+        )
+        row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def _get_upcoming_sessions(cohort_id: int, days_ahead: int = 45) -> list:
+    """SESSIONS: scheduled sessions for a cohort within the next `days_ahead` days."""
+    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    horizon_utc = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d %H:%M")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, session_number, scheduled_at, topic, link, recurring, days_of_week "
+            "FROM cohort_sessions "
+            "WHERE cohort_id = ? AND status = 'scheduled' "
+            "AND scheduled_at >= ? AND scheduled_at <= ? "
+            "ORDER BY scheduled_at ASC",
+            (cohort_id, now_utc, horizon_utc),
+        )
+        return await cur.fetchall()
+
+
+async def _get_session(session_id: int):
+    """SESSIONS: full row for one session, or None if it no longer exists."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, cohort_id, session_number, scheduled_at, topic, link, status, "
+            "recurring, days_of_week FROM cohort_sessions WHERE id = ?",
+            (session_id,),
+        )
+        return await cur.fetchone()
+
+
+async def _update_session_field(session_id: int, field: str, value: str):
+    """SESSIONS: update one editable column (scheduled_at/topic/link) of a session."""
+    if field not in ("scheduled_at", "topic", "link"):
+        raise ValueError(f"field not editable: {field}")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE cohort_sessions SET {field} = ? WHERE id = ?", (value, session_id))
+        await db.commit()
+
+
+async def _delete_cohort_session(session_id: int):
+    """SESSIONS: remove a session and its attendance rows."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM cohort_attendance WHERE session_id = ?", (session_id,))
+        await db.execute("DELETE FROM cohort_sessions WHERE id = ?", (session_id,))
+        await db.commit()
+
+
+async def _is_recurring_paused(cohort_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT recurring_paused FROM cohorts WHERE id = ?", (cohort_id,))
+        row = await cur.fetchone()
+    return bool(row and row[0])
+
+
+async def _set_recurring_paused(cohort_id: int, paused: bool):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE cohorts SET recurring_paused = ? WHERE id = ?", (1 if paused else 0, cohort_id),
+        )
+        await db.commit()
+
+
+async def _delete_recurring_rule(cohort_id: int):
+    """SESSIONS / RECURRING: forget the schedule for a cohort. Already-created
+    sessions are kept as-is (just no longer flagged as part of a live rule),
+    and the generator will find no more `recurring=1` template to work from."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE cohort_sessions SET recurring = 0, days_of_week = '' "
+            "WHERE cohort_id = ? AND recurring = 1",
+            (cohort_id,),
+        )
+        await db.execute("UPDATE cohorts SET recurring_paused = 0 WHERE id = ?", (cohort_id,))
+        await db.commit()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -437,27 +525,16 @@ async def cohort_schedule_start(message: Message, state: FSMContext):
 
 @router.callback_query(CohortScheduleForm.cohort, F.data.startswith("csch_coh_"))
 async def cs_got_cohort(callback: CallbackQuery, state: FSMContext):
+    """SESSIONS: session number is auto-assigned (next in sequence) — no manual
+    entry required, straight to picking the date/time."""
     lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("csch_coh_"):])
-    await state.update_data(cohort_id=cohort_id)
-    await state.set_state(CohortScheduleForm.session_number)
-    await callback.answer()
-    await callback.message.answer(t(lang, "cs_ask_session_num"), reply_markup=cancel_keyboard(lang))
-
-
-@router.message(CohortScheduleForm.session_number)
-async def cs_got_session_number(message: Message, state: FSMContext):
-    lang = await get_user_lang(message.from_user.id)
-    try:
-        num = int(message.text.strip())
-        if num < 1:
-            raise ValueError
-    except ValueError:
-        await message.answer(t(lang, "minutes_invalid"))
-        return
-    await state.update_data(session_number=num)
+    existing = await _get_cohort_sessions(cohort_id)
+    next_num = max((row[1] for row in existing), default=0) + 1
+    await state.update_data(cohort_id=cohort_id, session_number=next_num)
     await state.set_state(CohortScheduleForm.datetime_)
-    await message.answer(t(lang, "cs_ask_datetime"), reply_markup=cancel_keyboard(lang))
+    await callback.answer()
+    await callback.message.answer(t(lang, "cs_ask_datetime"), reply_markup=cancel_keyboard(lang))
 
 
 @router.message(CohortScheduleForm.datetime_)
@@ -566,6 +643,7 @@ async def generate_recurring_cohort_sessions(cohort_id: int = None) -> int:
         "SELECT cs.cohort_id, MAX(cs.id) "
         "FROM cohort_sessions cs JOIN cohorts c ON c.id = cs.cohort_id "
         "WHERE cs.recurring = 1 AND c.status != 'archived' "
+        "AND COALESCE(c.recurring_paused, 0) = 0 "
     )
     params: tuple = ()
     if cohort_id is not None:
@@ -1035,12 +1113,357 @@ async def cv2_members(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("cv2_sched_"))
 async def cv2_schedule(callback: CallbackQuery, state: FSMContext):
+    """SESSIONS: session number is auto-assigned here too — straight to date/time."""
     cid = int(callback.data[len("cv2_sched_"):])
     lang = await get_user_lang(callback.from_user.id)
-    await state.update_data(cohort_id=cid)
-    await state.set_state(CohortScheduleForm.session_number)
+    existing = await _get_cohort_sessions(cid)
+    next_num = max((row[1] for row in existing), default=0) + 1
+    await state.update_data(cohort_id=cid, session_number=next_num)
+    await state.set_state(CohortScheduleForm.datetime_)
     await callback.answer()
-    await callback.message.answer(t(lang, "cs_ask_session_num"), reply_markup=cancel_keyboard(lang))
+    await callback.message.answer(t(lang, "cs_ask_datetime"), reply_markup=cancel_keyboard(lang))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SESSIONS: cv2_slist — browsable session list + per-session detail/actions
+# ══════════════════════════════════════════════════════════════════════════
+
+_SESSIONS_HORIZON_DAYS = 45
+
+
+async def _render_session_list(uid: int, cohort_id: int, lang: str):
+    """SESSIONS: builds (text, keyboard) for the session list, or None if the
+    caller doesn't own this cohort."""
+    cohort_name = await _verify_cohort_owner(cohort_id, uid)
+    if cohort_name is None:
+        return None
+    sessions = await _get_upcoming_sessions(cohort_id, _SESSIONS_HORIZON_DAYS)
+    _, p_offset = await get_user_timezone(uid)
+    if not sessions:
+        text = t(lang, "cs2_list_empty", cohort=cohort_name, days=_SESSIONS_HORIZON_DAYS)
+    else:
+        text = t(lang, "cs2_list_title", cohort=cohort_name, days=_SESSIONS_HORIZON_DAYS)
+    rows = []
+    for sid, num, sched_utc, topic, _link, recurring, _dow in sessions:
+        local_dt = utc_to_local(sched_utc, p_offset)
+        date_display = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        badge = " 🔁" if recurring else ""
+        label = f"{date_display} · #{num}{badge}"
+        if topic:
+            label += f" · {topic[:18]}"
+        rows.append((sid, label))
+    kb = cohort_session_list_keyboard(rows, cohort_id, lang)
+    return text, kb
+
+
+async def _render_session_detail(uid: int, session_id: int, lang: str):
+    """SESSIONS: builds (text, keyboard) for one session's detail/action view,
+    or None if the session is gone or doesn't belong to this psychologist."""
+    row = await _get_session(session_id)
+    if not row:
+        return None
+    sid, cohort_id, num, sched_utc, topic, link, _status, recurring, days_csv = row
+    cohort_name = await _verify_cohort_owner(cohort_id, uid)
+    if cohort_name is None:
+        return None
+    _, p_offset = await get_user_timezone(uid)
+    local_dt = utc_to_local(sched_utc, p_offset)
+    date_display = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+
+    lines = [
+        t(lang, "cs2_detail_header", num=num, cohort=cohort_name),
+        t(lang, "cs2_detail_date", date=date_display),
+        t(lang, "cs2_detail_topic", topic=topic if topic else t(lang, "cs_no_topic")),
+        t(lang, "cs2_detail_link", link=link if link else t(lang, "cs2_no_link")),
+    ]
+    paused = False
+    if recurring:
+        try:
+            day_idxs = sorted(int(d) for d in days_csv.split(",") if d.strip() != "")
+        except ValueError:
+            day_idxs = []
+        days_display = ", ".join(t(lang, _DOW_KEYS[d]) for d in day_idxs if 0 <= d <= 6)
+        lines.append(t(lang, "cs2_detail_recurring", days=days_display))
+        paused = await _is_recurring_paused(cohort_id)
+        if paused:
+            lines.append(t(lang, "cs2_detail_paused"))
+
+    text = "\n".join(lines)
+    kb = cohort_session_detail_keyboard(sid, cohort_id, bool(recurring), paused, lang)
+    return text, kb
+
+
+@router.callback_query(F.data.startswith("cv2_slist_"))
+async def cv2_session_list(callback: CallbackQuery):
+    cid = int(callback.data[len("cv2_slist_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    result = await _render_session_list(callback.from_user.id, cid, lang)
+    await callback.answer()
+    if result is None:
+        return
+    text, kb = result
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("csd_"))
+async def csd_session_detail(callback: CallbackQuery):
+    session_id = int(callback.data[len("csd_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    result = await _render_session_detail(callback.from_user.id, session_id, lang)
+    if result is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    text, kb = result
+    await callback.answer()
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb)
+
+
+# ── SESSIONS: edit date/time ───────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("csdt_"))
+async def csdt_start(callback: CallbackQuery, state: FSMContext):
+    session_id = int(callback.data[len("csdt_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_session(session_id)
+    if not row or await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    await state.update_data(session_id=session_id, cohort_id=row[1])
+    await state.set_state(CohortSessionEditForm.datetime_)
+    await callback.answer()
+    await callback.message.answer(t(lang, "cs2_ask_datetime_new"), reply_markup=cancel_keyboard(lang))
+
+
+@router.message(CohortSessionEditForm.datetime_)
+async def csdt_got_value(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    raw = message.text.strip()
+    try:
+        datetime.strptime(raw, "%Y-%m-%d %H:%M")
+    except ValueError:
+        await message.answer(t(lang, "date_invalid"))
+        return
+    data = await state.get_data()
+    session_id = data["session_id"]
+    _, p_offset = await get_user_timezone(message.from_user.id)
+    scheduled_at_utc = local_to_utc(raw, p_offset)
+    await _update_session_field(session_id, "scheduled_at", scheduled_at_utc)
+    await state.clear()
+    await message.answer(t(lang, "cs2_updated_dt"))
+    result = await _render_session_detail(message.from_user.id, session_id, lang)
+    if result:
+        text, kb = result
+        await message.answer(text, reply_markup=kb)
+    log.info("SESSIONS: session_id=%d datetime updated by user_id=%d", session_id, message.from_user.id)
+
+
+# ── SESSIONS: edit topic ───────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cstp_"))
+async def cstp_start(callback: CallbackQuery, state: FSMContext):
+    session_id = int(callback.data[len("cstp_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_session(session_id)
+    if not row or await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    await state.update_data(session_id=session_id, cohort_id=row[1])
+    await state.set_state(CohortSessionEditForm.topic)
+    await callback.answer()
+    await callback.message.answer(t(lang, "cs2_ask_topic_new"),
+                                  reply_markup=cohort_clear_field_keyboard("csed_clr_topic", lang))
+
+
+@router.callback_query(CohortSessionEditForm.topic, F.data == "csed_clr_topic")
+async def cstp_clear(callback: CallbackQuery, state: FSMContext):
+    await _finish_field_edit(callback, state, "topic", "", "cs2_updated_topic")
+
+
+@router.message(CohortSessionEditForm.topic)
+async def cstp_got_value(message: Message, state: FSMContext):
+    await _finish_field_edit(message, state, "topic", message.text.strip(), "cs2_updated_topic")
+
+
+# ── SESSIONS: edit link ─────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("cslk_"))
+async def cslk_start(callback: CallbackQuery, state: FSMContext):
+    session_id = int(callback.data[len("cslk_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_session(session_id)
+    if not row or await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    await state.update_data(session_id=session_id, cohort_id=row[1])
+    await state.set_state(CohortSessionEditForm.link)
+    await callback.answer()
+    await callback.message.answer(t(lang, "cs2_ask_link_new"),
+                                  reply_markup=cohort_clear_field_keyboard("csed_clr_link", lang))
+
+
+@router.callback_query(CohortSessionEditForm.link, F.data == "csed_clr_link")
+async def cslk_clear(callback: CallbackQuery, state: FSMContext):
+    await _finish_field_edit(callback, state, "link", "", "cs2_updated_link")
+
+
+@router.message(CohortSessionEditForm.link)
+async def cslk_got_value(message: Message, state: FSMContext):
+    await _finish_field_edit(message, state, "link", message.text.strip(), "cs2_updated_link")
+
+
+async def _finish_field_edit(source, state: FSMContext, field: str, value: str, ok_key: str):
+    """SESSIONS: shared tail for topic/link edits — persists the value, clears
+    the FSM, confirms, then re-shows the (now updated) session detail view."""
+    uid = source.from_user.id
+    lang = await get_user_lang(uid)
+    data = await state.get_data()
+    session_id = data["session_id"]
+    await _update_session_field(session_id, field, value)
+    await state.clear()
+    reply = t(lang, ok_key)
+    result = await _render_session_detail(uid, session_id, lang)
+    if isinstance(source, CallbackQuery):
+        await source.answer(reply)
+        if result:
+            text, kb = result
+            await source.message.answer(text, reply_markup=kb)
+    else:
+        await source.answer(reply)
+        if result:
+            text, kb = result
+            await source.answer(text, reply_markup=kb)
+    log.info("SESSIONS: session_id=%d field=%s updated by user_id=%d", session_id, field, uid)
+
+
+# ── SESSIONS: delete session ────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("csdl_"))
+async def csdl_ask(callback: CallbackQuery):
+    session_id = int(callback.data[len("csdl_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_session(session_id)
+    if not row or await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    _, _cid, num, sched_utc, *_ = row
+    _, p_offset = await get_user_timezone(callback.from_user.id)
+    local_dt = utc_to_local(sched_utc, p_offset)
+    date_display = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    await callback.answer()
+    kb = cohort_confirm_keyboard("cs2_delete_yes", "cs2_delete_no",
+                                 f"csdy_{session_id}", f"csdn_{session_id}", lang)
+    await callback.message.answer(t(lang, "cs2_delete_confirm", num=num, date=date_display), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("csdy_"))
+async def csdy_confirm(callback: CallbackQuery):
+    session_id = int(callback.data[len("csdy_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_session(session_id)
+    if not row or await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    _, cohort_id, num, *_ = row
+    await _delete_cohort_session(session_id)
+    await callback.answer(t(lang, "cs2_deleted_ok", num=num))
+    result = await _render_session_list(callback.from_user.id, cohort_id, lang)
+    if result:
+        text, kb = result
+        await callback.message.answer(text, reply_markup=kb)
+    log.info("SESSIONS: session_id=%d deleted by user_id=%d", session_id, callback.from_user.id)
+
+
+@router.callback_query(F.data.startswith("csdn_"))
+async def csdn_cancel(callback: CallbackQuery):
+    session_id = int(callback.data[len("csdn_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    result = await _render_session_detail(callback.from_user.id, session_id, lang)
+    await callback.answer()
+    if result:
+        text, kb = result
+        await callback.message.answer(text, reply_markup=kb)
+
+
+# ── SESSIONS: pause / resume the recurrence rule ────────────────────────────
+
+@router.callback_query(F.data.startswith("cspz_"))
+async def cspz_toggle(callback: CallbackQuery):
+    session_id = int(callback.data[len("cspz_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_session(session_id)
+    if not row or await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    cohort_id = row[1]
+    cohort_name = await _get_cohort_name(cohort_id)
+    currently_paused = await _is_recurring_paused(cohort_id)
+    await _set_recurring_paused(cohort_id, not currently_paused)
+    feedback = t(lang, "cs2_resumed_ok" if currently_paused else "cs2_paused_ok", cohort=cohort_name)
+    await callback.answer(feedback, show_alert=True)
+    result = await _render_session_detail(callback.from_user.id, session_id, lang)
+    if result:
+        text, kb = result
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            await callback.message.answer(text, reply_markup=kb)
+    log.info("SESSIONS: cohort_id=%d recurring_paused=%s by user_id=%d",
+             cohort_id, not currently_paused, callback.from_user.id)
+
+
+# ── SESSIONS: delete the recurrence rule ────────────────────────────────────
+
+@router.callback_query(F.data.startswith("csrl_"))
+async def csrl_ask(callback: CallbackQuery):
+    session_id = int(callback.data[len("csrl_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_session(session_id)
+    if not row or await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    cohort_id = row[1]
+    cohort_name = await _get_cohort_name(cohort_id)
+    await callback.answer()
+    kb = cohort_confirm_keyboard("cs2_delrule_yes", "cs2_delrule_no",
+                                 f"csry_{session_id}", f"csrn_{session_id}", lang)
+    await callback.message.answer(t(lang, "cs2_delrule_confirm", cohort=cohort_name), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("csry_"))
+async def csry_confirm(callback: CallbackQuery):
+    session_id = int(callback.data[len("csry_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    row = await _get_session(session_id)
+    if not row or await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+        return
+    cohort_id = row[1]
+    cohort_name = await _get_cohort_name(cohort_id)
+    await _delete_recurring_rule(cohort_id)
+    await callback.answer(t(lang, "cs2_delrule_ok", cohort=cohort_name), show_alert=True)
+    result = await _render_session_detail(callback.from_user.id, session_id, lang)
+    if result:
+        text, kb = result
+        await callback.message.answer(text, reply_markup=kb)
+    log.info("SESSIONS: recurring rule deleted cohort_id=%d by user_id=%d",
+             cohort_id, callback.from_user.id)
+
+
+@router.callback_query(F.data.startswith("csrn_"))
+async def csrn_cancel(callback: CallbackQuery):
+    session_id = int(callback.data[len("csrn_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    result = await _render_session_detail(callback.from_user.id, session_id, lang)
+    await callback.answer()
+    if result:
+        text, kb = result
+        await callback.message.answer(text, reply_markup=kb)
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -383,7 +383,8 @@ def cohort_action_keyboard(cohort_id: int, lang: str) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text=t(lang, "cv2_broadcast"),  callback_data=f"cv2_bc_{cid}")],
         [InlineKeyboardButton(text=t(lang, "cv2_stats"),      callback_data=f"cv2_stats_{cid}"),
          InlineKeyboardButton(text=t(lang, "cv2_archive"),    callback_data=f"cv2_arch_{cid}")],
-        [InlineKeyboardButton(text=t(lang, "cv2_recurring"),  callback_data=f"cv2_rsched_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_sessions"),   callback_data=f"cv2_slist_{cid}"),
+         InlineKeyboardButton(text=t(lang, "cv2_recurring"),  callback_data=f"cv2_rsched_{cid}")],
         [InlineKeyboardButton(text=t(lang, "cv2_back"),       callback_data="cv2_coh_list")],
     ])
 
@@ -408,6 +409,60 @@ def cohort_recurring_days_keyboard(selected, lang: str) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(text=t(lang, "cs_recurring_days_done"), callback_data="crday_done")])
     rows.append([InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ── SESSIONS: browsable session list + detail/action view for a cohort ────
+
+def cohort_session_list_keyboard(session_rows, cohort_id, lang: str) -> InlineKeyboardMarkup:
+    """SESSIONS: one button per session (opens the detail/action view),
+    plus shortcuts to add a one-off session or set up a recurring one."""
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"csd_{sid}")]
+        for sid, label in session_rows
+    ]
+    rows.append([InlineKeyboardButton(text=t(lang, "cs2_btn_add_oneoff"),
+                                       callback_data=f"cv2_sched_{cohort_id}")])
+    rows.append([InlineKeyboardButton(text=t(lang, "cs2_btn_add_recurring"),
+                                       callback_data=f"cv2_rsched_{cohort_id}")])
+    rows.append([InlineKeyboardButton(text=t(lang, "cv2_back"), callback_data=f"cv2_pick_{cohort_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def cohort_session_detail_keyboard(session_id, cohort_id, recurring: bool, paused: bool,
+                                    lang: str) -> InlineKeyboardMarkup:
+    """SESSIONS: edit/delete actions for one session, plus recurrence
+    pause/resume + delete-rule actions when the session is part of a schedule."""
+    rows = [
+        [InlineKeyboardButton(text=t(lang, "cs2_btn_edit_dt"), callback_data=f"csdt_{session_id}"),
+         InlineKeyboardButton(text=t(lang, "cs2_btn_edit_topic"), callback_data=f"cstp_{session_id}")],
+        [InlineKeyboardButton(text=t(lang, "cs2_btn_edit_link"), callback_data=f"cslk_{session_id}"),
+         InlineKeyboardButton(text=t(lang, "cs2_btn_delete"), callback_data=f"csdl_{session_id}")],
+    ]
+    if recurring:
+        pause_label = t(lang, "cs2_btn_resume") if paused else t(lang, "cs2_btn_pause")
+        rows.append([InlineKeyboardButton(text=pause_label, callback_data=f"cspz_{session_id}")])
+        rows.append([InlineKeyboardButton(text=t(lang, "cs2_btn_delete_rule"),
+                                           callback_data=f"csrl_{session_id}")])
+    rows.append([InlineKeyboardButton(text=t(lang, "cs2_btn_back_list"),
+                                       callback_data=f"cv2_slist_{cohort_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def cohort_confirm_keyboard(yes_key: str, no_key: str, yes_cb: str, no_cb: str,
+                             lang: str) -> InlineKeyboardMarkup:
+    """SESSIONS: generic yes/no confirmation row for destructive actions."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, yes_key), callback_data=yes_cb),
+        InlineKeyboardButton(text=t(lang, no_key), callback_data=no_cb),
+    ]])
+
+
+def cohort_clear_field_keyboard(clear_cb: str, lang: str) -> InlineKeyboardMarkup:
+    """SESSIONS: while editing topic/link, offer a Clear button plus cancel."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cs2_btn_clear"), callback_data=clear_cb)],
+        [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
+    ])
 
 
 # ── FSM cancel ────────────────────────────────────────────────────────────

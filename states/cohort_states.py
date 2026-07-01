@@ -33,6 +33,13 @@ class CohortRecurringScheduleForm(StatesGroup):
     link = State()
 
 
+# SESSIONS: FSM for editing a single field of an existing cohort session
+class CohortSessionEditForm(StatesGroup):
+    datetime_ = State()
+    topic = State()
+    link = State()
+
+
 # COHORT_V2: FSM for broadcasting a message to all cohort members
 class CohortBroadcastForm(StatesGroup):
     message = State()

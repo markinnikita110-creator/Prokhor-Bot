@@ -37,6 +37,7 @@ Prefixes are strictly non-overlapping — verify that `startswith(prefix)` can't
 - Session list/card: `sl_{page}`, `sc_{id}`, `sa_{id}_{action}`
 - Cohort core: `cohort_join_{token}`, `cohort_type_{key}`
 - Cohort session: `csch_*`, `csl_*`, `catt_*`
+- Cohort v2 session list/detail (SESSIONS feature): `cv2_slist_{cid}` (list), `csd_{sid}` (detail), `csdt_*`/`cstp_*`/`cslk_*` (edit datetime/topic/link), `csdl_*`/`csdy_*`/`csdn_*` (delete session confirm/yes/no), `cspz_*` (pause/resume recurrence), `csrl_*`/`csry_*`/`csrn_*` (delete-recurrence-rule confirm/yes/no)
 - Cohort v2 action: `cv2_pick_{cid}`, `cv2_mem_{cid}`, `cv2_sched_{cid}`, `cv2_att_{cid}`
 - Cohort v2 checkins: `cv2_ci_{cid}`, `cv2_cistp_{cid}`, `cv2_cisum_{cid}`, `cv2_cisnd_{cid}`
 - Cohort v2 notes: `cv2_notes_{cid}`, `cv2_nses_{sid}`, `cv2_nadd_{sid}`, `cv2_nsoap_{sid}`
@@ -80,3 +81,5 @@ All FSM state classes from all state files must be listed in `states/__init__.py
 - `generate_recurring_cohort_sessions(cohort_id=None)` in `handlers/cohorts.py` fills a rolling 30-day horizon and is idempotent (skips dates that already have a session). Called once/day from `reminder_loop()` in `main.py` (gated by a module-level last-run-date variable) and once synchronously right after a new schedule is created, so the horizon isn't empty until the next daily tick.
 - Recurring session creation auto-seeds `cohort_attendance` rows for active members (`_seed_attendance_for_session`); one-off sessions intentionally do not, to avoid changing existing one-off behavior.
 - FSM callback prefixes `crsch_*`/`crday_*` are deliberately distinct from the one-off scheduling flow's `csch_*` prefixes to avoid FSM-state ambiguity between the two flows.
+- `cohorts.recurring_paused` (0/1) lets a psychologist pause generation without deleting the rule; `generate_recurring_cohort_sessions` skips paused cohorts. Deleting the rule (vs pausing) clears `recurring=0, days_of_week=''` on all that cohort's `recurring=1` rows and resets `recurring_paused=0`, but keeps already-created sessions as plain one-offs.
+- Manual session-number entry was removed from both scheduling entry points (`csch_coh_*`, `cv2_sched_*`) — the next session number is auto-computed as `max(existing)+1` so users never type it.
