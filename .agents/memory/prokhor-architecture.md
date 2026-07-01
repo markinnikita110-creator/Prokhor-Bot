@@ -73,3 +73,10 @@ Use `bot: Bot` parameter in handlers (aiogram 3.x auto-injects). Never use a glo
 
 ## states/__init__.py
 All FSM state classes from all state files must be listed in `states/__init__.py` `__all__`. Missing exports cause ImportError.
+
+## Recurring cohort sessions
+- `cohort_sessions` has `recurring` (0/1) + `days_of_week` (CSV of Python weekday ints, Mon=0) columns; added via migration in `database.py migrate_db()`.
+- Template-based generation: per cohort, the most recently created (`MAX(id)`) row with `recurring=1` supplies time/topic/link/days for generating future occurrences — there's no separate "schedule rule" table, the last recurring session row *is* the rule.
+- `generate_recurring_cohort_sessions(cohort_id=None)` in `handlers/cohorts.py` fills a rolling 30-day horizon and is idempotent (skips dates that already have a session). Called once/day from `reminder_loop()` in `main.py` (gated by a module-level last-run-date variable) and once synchronously right after a new schedule is created, so the horizon isn't empty until the next daily tick.
+- Recurring session creation auto-seeds `cohort_attendance` rows for active members (`_seed_attendance_for_session`); one-off sessions intentionally do not, to avoid changing existing one-off behavior.
+- FSM callback prefixes `crsch_*`/`crday_*` are deliberately distinct from the one-off scheduling flow's `csch_*` prefixes to avoid FSM-state ambiguity between the two flows.

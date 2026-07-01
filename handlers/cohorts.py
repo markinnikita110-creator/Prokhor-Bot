@@ -6,7 +6,7 @@ Commands: /cohort_create, /cohorts, /cohort_schedule, /cohort_sessions,
 
 import logging
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import aiosqlite
 from aiogram import F, Router
@@ -29,12 +29,18 @@ from database import (
     now_str,
     utc_to_local,
 )
-from keyboards import cancel_keyboard, cohort_action_keyboard, cohort_type_keyboard
+from keyboards import (
+    cancel_keyboard,
+    cohort_action_keyboard,
+    cohort_recurring_days_keyboard,
+    cohort_type_keyboard,
+)
 from states.cohort_states import (
     CohortAttendanceForm,
     CohortBroadcastForm,
     CohortCheckinSetupForm,
     CohortCreateForm,
+    CohortRecurringScheduleForm,
     CohortScheduleForm,
     CohortSessionNoteForm,
     CohortSOAPNoteForm,
@@ -42,6 +48,9 @@ from states.cohort_states import (
 from translations import t
 
 from handlers.clients import BOT_USERNAME  # COHORT: bot username for invite links
+
+# RECURRING: display names for weekday indices (0=Mon..6=Sun), keyed to translations.py
+_DOW_KEYS = ["dow_mon", "dow_tue", "dow_wed", "dow_thu", "dow_fri", "dow_sat", "dow_sun"]
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -120,17 +129,35 @@ async def _get_cohorts_for_psych(psychologist_id: int) -> list:
 # COHORT_SESSION: DB helpers
 # ══════════════════════════════════════════════════════════════════════════
 
-async def _create_cohort_session(cohort_id, session_number, scheduled_at_utc, topic, link):
+async def _create_cohort_session(cohort_id, session_number, scheduled_at_utc, topic, link,
+                                  recurring=0, days_of_week=""):
+    """COHORT_SESSION / RECURRING: create a session. `recurring`/`days_of_week`
+    default to off, so this stays fully backward compatible with one-off sessions."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "INSERT INTO cohort_sessions "
-            "(cohort_id, session_number, scheduled_at, topic, link, status) "
-            "VALUES (?, ?, ?, ?, ?, 'scheduled')",
-            (cohort_id, session_number, scheduled_at_utc, topic, link),
+            "(cohort_id, session_number, scheduled_at, topic, link, status, recurring, days_of_week) "
+            "VALUES (?, ?, ?, ?, ?, 'scheduled', ?, ?)",
+            (cohort_id, session_number, scheduled_at_utc, topic, link, recurring, days_of_week),
         )
         session_id = cur.lastrowid
         await db.commit()
     return session_id
+
+
+async def _seed_attendance_for_session(cohort_id: int, session_id: int):
+    """RECURRING: create pending attendance rows for all active members of a
+    cohort right when a session (one-off or auto-generated) is created."""
+    members = await _get_active_members(cohort_id)
+    if not members:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "INSERT OR IGNORE INTO cohort_attendance (session_id, member_id, status) "
+            "VALUES (?, ?, 'pending')",
+            [(session_id, member_id) for member_id, _tg, _name in members],
+        )
+        await db.commit()
 
 
 async def _get_cohort_sessions(cohort_id: int) -> list:
@@ -512,6 +539,276 @@ async def _finalize_schedule(source, state: FSMContext):
         await source.answer(reply)
     log.info("COHORT_SESSION: created session_id=%d cohort_id=%d num=%d by user_id=%d",
              session_id, cohort_id, session_number, uid)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# RECURRING: generator — creates upcoming occurrences for the next 30 days
+# ══════════════════════════════════════════════════════════════════════════
+
+async def generate_recurring_cohort_sessions(cohort_id: int = None) -> int:
+    """RECURRING: for every cohort with a recurring session schedule, create
+    missing occurrences on the matching weekdays for the next 30 days.
+
+    Called once/day from `reminder_loop()` in main.py, and once immediately
+    after a psychologist sets up a new recurring schedule (via `cohort_id=`)
+    so the horizon is filled in right away instead of waiting for the next
+    daily tick.
+
+    For each cohort the most recently created recurring session (highest id)
+    acts as the template: its time-of-day, topic, link and days_of_week are
+    reused for every generated occurrence. Dates that already have a session
+    are skipped, so this is safe to call repeatedly (idempotent).
+    """
+    today = datetime.utcnow().date()
+    horizon = today + timedelta(days=30)
+
+    query = (
+        "SELECT cs.cohort_id, MAX(cs.id) "
+        "FROM cohort_sessions cs JOIN cohorts c ON c.id = cs.cohort_id "
+        "WHERE cs.recurring = 1 AND c.status != 'archived' "
+    )
+    params: tuple = ()
+    if cohort_id is not None:
+        query += "AND cs.cohort_id = ? "
+        params = (cohort_id,)
+    query += "GROUP BY cs.cohort_id"
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(query, params)
+        rule_rows = await cur.fetchall()
+
+    total_created = 0
+    for c_id, last_id in rule_rows:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT session_number, scheduled_at, topic, link, days_of_week "
+                "FROM cohort_sessions WHERE id = ?",
+                (last_id,),
+            )
+            row = await cur.fetchone()
+        if not row:
+            continue
+        last_num, sched_str, topic, link, days_csv = row
+        if not days_csv:
+            continue
+        try:
+            days = {int(d) for d in days_csv.split(",") if d.strip() != ""}
+        except ValueError:
+            continue
+        if not days:
+            continue
+        try:
+            time_part = datetime.strptime(sched_str, "%Y-%m-%d %H:%M").strftime("%H:%M")
+        except ValueError:
+            continue
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT scheduled_at FROM cohort_sessions WHERE cohort_id = ?",
+                (c_id,),
+            )
+            existing_dates = {r[0].split(" ")[0] for r in await cur.fetchall()}
+
+        next_num = last_num
+        day_cursor = today
+        while day_cursor <= horizon:
+            if day_cursor.weekday() in days:
+                date_str = day_cursor.strftime("%Y-%m-%d")
+                if date_str not in existing_dates:
+                    next_num += 1
+                    scheduled_at = f"{date_str} {time_part}"
+                    new_session_id = await _create_cohort_session(
+                        c_id, next_num, scheduled_at, topic, link,
+                        recurring=1, days_of_week=days_csv,
+                    )
+                    await _seed_attendance_for_session(c_id, new_session_id)
+                    existing_dates.add(date_str)
+                    total_created += 1
+            day_cursor += timedelta(days=1)
+
+    if total_created:
+        log.info("RECURRING: generator created %d session(s)", total_created)
+    return total_created
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# RECURRING: /cohort_recurring_schedule — FSM for weekly-repeating sessions
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.message(Command("cohort_recurring_schedule"))
+async def cohort_recurring_schedule_start(message: Message, state: FSMContext):
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
+    cohorts = await _get_cohorts_for_psych(uid)
+    if not cohorts:
+        await message.answer(t(lang, "no_cohorts"))
+        return
+    await state.set_state(CohortRecurringScheduleForm.cohort)
+    await message.answer(t(lang, "cs_recurring_pick_cohort"),
+                         reply_markup=_cohort_picker_kb(cohorts, "crsch_coh"))
+
+
+@router.callback_query(F.data.startswith("cv2_rsched_"))
+async def cv2_recurring_schedule(callback: CallbackQuery, state: FSMContext):
+    """RECURRING: cv2_rsched shortcut — jump straight into day-of-week picking."""
+    cid = int(callback.data[len("cv2_rsched_"):])
+    lang = await get_user_lang(callback.from_user.id)
+    await state.update_data(cohort_id=cid, days=set())
+    await state.set_state(CohortRecurringScheduleForm.days)
+    await callback.answer()
+    await callback.message.answer(
+        t(lang, "cs_recurring_ask_days"),
+        reply_markup=cohort_recurring_days_keyboard(set(), lang),
+    )
+
+
+@router.callback_query(CohortRecurringScheduleForm.cohort, F.data.startswith("crsch_coh_"))
+async def cr_got_cohort(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_lang(callback.from_user.id)
+    cohort_id = int(callback.data[len("crsch_coh_"):])
+    await state.update_data(cohort_id=cohort_id, days=set())
+    await state.set_state(CohortRecurringScheduleForm.days)
+    await callback.answer()
+    await callback.message.answer(
+        t(lang, "cs_recurring_ask_days"),
+        reply_markup=cohort_recurring_days_keyboard(set(), lang),
+    )
+
+
+@router.callback_query(CohortRecurringScheduleForm.days, F.data.startswith("crday_"))
+async def cr_toggle_day(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_lang(callback.from_user.id)
+    payload = callback.data[len("crday_"):]
+
+    if payload == "done":
+        data = await state.get_data()
+        days = data.get("days", set())
+        if not days:
+            await callback.answer(t(lang, "cs_recurring_days_empty"), show_alert=True)
+            return
+        await state.set_state(CohortRecurringScheduleForm.time_)
+        await callback.answer()
+        await callback.message.answer(t(lang, "cs_recurring_ask_time"), reply_markup=cancel_keyboard(lang))
+        return
+
+    try:
+        day_idx = int(payload)
+    except ValueError:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    days = set(data.get("days", set()))
+    if day_idx in days:
+        days.discard(day_idx)
+    else:
+        days.add(day_idx)
+    await state.update_data(days=days)
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=cohort_recurring_days_keyboard(days, lang))
+
+
+@router.message(CohortRecurringScheduleForm.time_)
+async def cr_got_time(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    raw = message.text.strip()
+    try:
+        datetime.strptime(raw, "%H:%M")
+    except ValueError:
+        await message.answer(t(lang, "date_invalid"))
+        return
+    await state.update_data(time_local=raw)
+    await state.set_state(CohortRecurringScheduleForm.topic)
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_topic")
+    ]])
+    await message.answer(t(lang, "cs_ask_topic"), reply_markup=skip_kb)
+
+
+@router.callback_query(CohortRecurringScheduleForm.topic, F.data == "crsch_skip_topic")
+async def cr_skip_topic(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_lang(callback.from_user.id)
+    await state.update_data(topic="")
+    await state.set_state(CohortRecurringScheduleForm.link)
+    await callback.answer()
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_link")
+    ]])
+    await callback.message.answer(t(lang, "cs_ask_link"), reply_markup=skip_kb)
+
+
+@router.message(CohortRecurringScheduleForm.topic)
+async def cr_got_topic(message: Message, state: FSMContext):
+    lang = await get_user_lang(message.from_user.id)
+    await state.update_data(topic=message.text.strip())
+    await state.set_state(CohortRecurringScheduleForm.link)
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_link")
+    ]])
+    await message.answer(t(lang, "cs_ask_link"), reply_markup=skip_kb)
+
+
+@router.callback_query(CohortRecurringScheduleForm.link, F.data == "crsch_skip_link")
+async def cr_skip_link(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(link="")
+    await _finalize_recurring_schedule(callback, state)
+
+
+@router.message(CohortRecurringScheduleForm.link)
+async def cr_got_link(message: Message, state: FSMContext):
+    await state.update_data(link=message.text.strip())
+    await _finalize_recurring_schedule(message, state)
+
+
+async def _finalize_recurring_schedule(source, state: FSMContext):
+    """RECURRING: create the first occurrence as the recurring template, then
+    immediately backfill the rest of the 30-day horizon for this cohort."""
+    uid = source.from_user.id
+    lang = await get_user_lang(uid)
+    data = await state.get_data()
+    cohort_id = data["cohort_id"]
+    days = sorted(data["days"])
+    days_csv = ",".join(str(d) for d in days)
+    time_local = data["time_local"]
+    topic = data.get("topic", "")
+    link = data.get("link", "")
+
+    existing = await _get_cohort_sessions(cohort_id)
+    next_num = max((row[1] for row in existing), default=0) + 1
+
+    # Find the soonest date (today or later) matching one of the picked weekdays.
+    # NOTE: uses UTC "today" as the base day — close enough for scheduling purposes,
+    # and consistent with how the daily generator advances through the horizon.
+    today = datetime.utcnow().date()
+    first_date = today
+    for _ in range(7):
+        if first_date.weekday() in days:
+            break
+        first_date += timedelta(days=1)
+
+    _, p_offset = await get_user_timezone(uid)
+    local_dt_str = f"{first_date.strftime('%Y-%m-%d')} {time_local}"
+    scheduled_at_utc = local_to_utc(local_dt_str, p_offset)
+
+    session_id = await _create_cohort_session(
+        cohort_id, next_num, scheduled_at_utc, topic, link,
+        recurring=1, days_of_week=days_csv,
+    )
+    await _seed_attendance_for_session(cohort_id, session_id)
+
+    # Backfill the remaining occurrences in the 30-day horizon right away.
+    await generate_recurring_cohort_sessions(cohort_id=cohort_id)
+
+    cohort_name = await _get_cohort_name(cohort_id)
+    days_display = ", ".join(t(lang, _DOW_KEYS[d]) for d in days)
+    await state.clear()
+    reply = t(lang, "cs_recurring_created", cohort=cohort_name, days=days_display, time=time_local)
+    if isinstance(source, CallbackQuery):
+        await source.answer()
+        await source.message.answer(reply)
+    else:
+        await source.answer(reply)
+    log.info("RECURRING: created template session_id=%d cohort_id=%d days=%s by user_id=%d",
+             session_id, cohort_id, days_csv, uid)
 
 
 # ══════════════════════════════════════════════════════════════════════════

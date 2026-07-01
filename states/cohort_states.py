@@ -24,6 +24,15 @@ class CohortAttendanceForm(StatesGroup):
     session = State()
 
 
+# RECURRING: FSM for scheduling a recurring (weekly) group session
+class CohortRecurringScheduleForm(StatesGroup):
+    cohort = State()
+    days = State()
+    time_ = State()
+    topic = State()
+    link = State()
+
+
 # COHORT_V2: FSM for broadcasting a message to all cohort members
 class CohortBroadcastForm(StatesGroup):
     message = State()

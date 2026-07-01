@@ -11,6 +11,7 @@ from .cohort_states import (  # COHORT_V2
     CohortCheckinSetupForm,
     CohortSessionNoteForm,
     CohortSOAPNoteForm,
+    CohortRecurringScheduleForm,  # RECURRING
 )
 
 # supervision
@@ -26,5 +27,6 @@ __all__ = [
     "CohortCreateForm", "CohortScheduleForm", "CohortAttendanceForm",
     "CohortBroadcastForm", "CohortCheckinSetupForm",
     "CohortSessionNoteForm", "CohortSOAPNoteForm",
+    "CohortRecurringScheduleForm",  # RECURRING
     "SupervisionCaseForm",
 ]

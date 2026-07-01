@@ -19,6 +19,7 @@ from database import (
 )
 from handlers import routers
 from handlers.clients import set_bot_username
+from handlers.cohorts import generate_recurring_cohort_sessions  # RECURRING
 from handlers.legal import ConsentMiddleware
 from translations import t
 
@@ -49,11 +50,23 @@ def _cohort_checkin_kb(cohort_id: int, member_tg: int) -> InlineKeyboardMarkup:
 
 
 # ── Background: reminder loop ──────────────────────────────────────────────
+_last_recurring_gen_date = None  # RECURRING: tracks last date the daily generator ran
+
+
 async def reminder_loop():
+    global _last_recurring_gen_date
     while True:
         await asyncio.sleep(60)
         try:
             now = datetime.utcnow()
+
+            # ── RECURRING: run the recurring-session generator once/day ────
+            today = now.date()
+            if _last_recurring_gen_date != today:
+                try:
+                    await generate_recurring_cohort_sessions()
+                finally:
+                    _last_recurring_gen_date = today
 
             # ── Individual session reminders ───────────────────────────────
             async with aiosqlite.connect(DB_PATH) as db:

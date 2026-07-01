@@ -295,6 +295,17 @@ TEXTS = {
         "cs_reminder_psych_1h":     "🔔 Cohort session #{num} ({cohort}) — in 1 hour at {time}. Members notified.{link_line}",
         "cs_link_line":             "\n🔗 {link}",
 
+        # ── RECURRING: recurring cohort sessions ───────────────────────────
+        "dow_mon": "Mon", "dow_tue": "Tue", "dow_wed": "Wed", "dow_thu": "Thu",
+        "dow_fri": "Fri", "dow_sat": "Sat", "dow_sun": "Sun",
+        "cs_recurring_pick_cohort":  "Select a cohort for the recurring session:",
+        "cs_recurring_ask_days":    "Pick the weekdays this session repeats on, then press Done:",
+        "cs_recurring_days_done":  "✅ Done",
+        "cs_recurring_days_empty": "Pick at least one weekday first.",
+        "cs_recurring_ask_time":   "Enter the session time in your local timezone (HH:MM):",
+        "cs_recurring_created":    "✅ Recurring session set up\nCohort: {cohort}\nDays: {days}\n🕐 {time}\nUpcoming sessions for the next 30 days have been scheduled automatically.",
+        "cs_recurring_intro":     "🔁 Set up a recurring cohort session",
+
         # ── MENU: hierarchical reply keyboard ─────────────────────────────
         "btn_menu_individual":   "👤 Individual",
         "btn_menu_cohorts":      "👥 My Cohorts",
@@ -333,6 +344,7 @@ TEXTS = {
         "cv2_broadcast":  "📢 Broadcast",
         "cv2_stats":      "📊 Statistics",
         "cv2_archive":    "📦 Archive",
+        "cv2_recurring":  "🔁 Recurring",
         "cv2_back":       "⬅️ Back",
         "cohort_action_title": "📋 {name}:",
 
@@ -711,6 +723,17 @@ TEXTS = {
         "cs_reminder_psych_1h":     "🔔 Сессия когорты #{num} ({cohort}) — через час в {time}. Участники уведомлены.{link_line}",
         "cs_link_line":             "\n🔗 {link}",
 
+        # ── RECURRING: повторяющиеся сессии когорты ────────────────────────
+        "dow_mon": "Пн", "dow_tue": "Вт", "dow_wed": "Ср", "dow_thu": "Чт",
+        "dow_fri": "Пт", "dow_sat": "Сб", "dow_sun": "Вс",
+        "cs_recurring_pick_cohort":  "Выберите когорту для повторяющейся сессии:",
+        "cs_recurring_ask_days":    "Выберите дни недели, в которые повторяется сессия, затем нажмите Готово:",
+        "cs_recurring_days_done":  "✅ Готово",
+        "cs_recurring_days_empty": "Сначала выберите хотя бы один день недели.",
+        "cs_recurring_ask_time":   "Введите время сессии в вашем часовом поясе (ЧЧ:ММ):",
+        "cs_recurring_created":    "✅ Повторяющаяся сессия настроена\nКогорта: {cohort}\nДни: {days}\n🕐 {time}\nБудущие сессии на ближайшие 30 дней уже запланированы автоматически.",
+        "cs_recurring_intro":     "🔁 Настроить повторяющуюся сессию когорты",
+
         # ── MENU: иерархическая клавиатура ────────────────────────────────
         "btn_menu_individual":   "👤 Индивидуальные",
         "btn_menu_cohorts":      "👥 Мои когорты",
@@ -749,6 +772,7 @@ TEXTS = {
         "cv2_broadcast":  "📢 Рассылка",
         "cv2_stats":      "📊 Статистика",
         "cv2_archive":    "📦 Архивировать",
+        "cv2_recurring":  "🔁 Повторяющиеся",
         "cv2_back":       "⬅️ Назад",
         "cohort_action_title": "📋 {name}:",
 

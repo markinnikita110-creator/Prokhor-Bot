@@ -383,8 +383,31 @@ def cohort_action_keyboard(cohort_id: int, lang: str) -> InlineKeyboardMarkup:
          InlineKeyboardButton(text=t(lang, "cv2_broadcast"),  callback_data=f"cv2_bc_{cid}")],
         [InlineKeyboardButton(text=t(lang, "cv2_stats"),      callback_data=f"cv2_stats_{cid}"),
          InlineKeyboardButton(text=t(lang, "cv2_archive"),    callback_data=f"cv2_arch_{cid}")],
+        [InlineKeyboardButton(text=t(lang, "cv2_recurring"),  callback_data=f"cv2_rsched_{cid}")],
         [InlineKeyboardButton(text=t(lang, "cv2_back"),       callback_data="cv2_coh_list")],
     ])
+
+
+# ── RECURRING: weekday multi-select keyboard for recurring session setup ──
+
+_DOW_KEYS = ["dow_mon", "dow_tue", "dow_wed", "dow_thu", "dow_fri", "dow_sat", "dow_sun"]
+
+
+def cohort_recurring_days_keyboard(selected, lang: str) -> InlineKeyboardMarkup:
+    """RECURRING: toggle keyboard for picking weekdays (0=Mon..6=Sun)."""
+    rows = []
+    row = []
+    for i, key in enumerate(_DOW_KEYS):
+        mark = "✅ " if i in selected else ""
+        row.append(InlineKeyboardButton(text=f"{mark}{t(lang, key)}", callback_data=f"crday_{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text=t(lang, "cs_recurring_days_done"), callback_data="crday_done")])
+    rows.append([InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── FSM cancel ────────────────────────────────────────────────────────────

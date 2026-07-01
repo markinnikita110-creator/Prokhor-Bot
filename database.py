@@ -148,6 +148,7 @@ async def init_db():
             );
 
             -- COHORT_SESSION: group sessions scheduled by psychologist
+            -- recurring/days_of_week (RECURRING) power the weekly repeat generator
             CREATE TABLE IF NOT EXISTS cohort_sessions (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 cohort_id      INTEGER NOT NULL,
@@ -157,7 +158,9 @@ async def init_db():
                 link           TEXT DEFAULT '',
                 reminded_24h   INTEGER DEFAULT 0,
                 reminded_1h    INTEGER DEFAULT 0,
-                status         TEXT DEFAULT 'scheduled'
+                status         TEXT DEFAULT 'scheduled',
+                recurring      INTEGER DEFAULT 0,
+                days_of_week   TEXT DEFAULT ''
             );
 
             -- COHORT_SESSION: per-member attendance for each cohort session
@@ -256,6 +259,16 @@ async def migrate_db():
         session_cols = {row[1] for row in await cur.fetchall()}
         if "link" not in session_cols:
             await db.execute("ALTER TABLE sessions ADD COLUMN link TEXT")
+
+        # RECURRING: cohort_sessions — recurring weekly sessions
+        cur = await db.execute("PRAGMA table_info(cohort_sessions)")
+        cohort_session_cols = {row[1] for row in await cur.fetchall()}
+        for col, definition in [
+            ("recurring",    "INTEGER DEFAULT 0"),
+            ("days_of_week", "TEXT DEFAULT ''"),
+        ]:
+            if col not in cohort_session_cols:
+                await db.execute(f"ALTER TABLE cohort_sessions ADD COLUMN {col} {definition}")
 
         await db.commit()
 
