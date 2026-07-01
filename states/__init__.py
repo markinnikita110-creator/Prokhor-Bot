@@ -1,5 +1,8 @@
 from .client_states import AddClientForm, InviteClientForm
-from .session_states import RescheduleForm, ScheduleSessionForm, ScheduleSessionFromCardForm
+from .session_states import (
+    RescheduleForm, ScheduleSessionForm, ScheduleSessionFromCardForm,
+    IndividualSessionRecurringForm, IndividualSessionEditForm, IndividualOneOffForm,
+)
 from .homework_states import AssignHomeworkForm, AssignHomeworkFromCardForm
 from .note_states import AddCheckinForm, AddNoteForm, SOAPForm, TagForm
 from .onboarding_states import OnboardingForm, TimezoneInputForm
@@ -21,6 +24,7 @@ from .supervision_states import SupervisionCaseForm  # COHORT_V2
 __all__ = [
     "AddClientForm", "InviteClientForm",
     "ScheduleSessionForm", "ScheduleSessionFromCardForm", "RescheduleForm",
+    "IndividualSessionRecurringForm", "IndividualSessionEditForm", "IndividualOneOffForm",
     "AssignHomeworkForm", "AssignHomeworkFromCardForm",
     "AddNoteForm", "SOAPForm", "TagForm", "AddCheckinForm",
     "OnboardingForm", "TimezoneInputForm",

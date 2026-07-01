@@ -87,9 +87,8 @@ def individual_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=t(lang, "btn_ind_add_client")),
              KeyboardButton(text=t(lang, "btn_ind_client_list"))],
             [KeyboardButton(text=t(lang, "btn_ind_new_note")),
-             KeyboardButton(text=t(lang, "btn_ind_schedule"))],
-            [KeyboardButton(text=t(lang, "btn_ind_reminders")),
-             KeyboardButton(text=t(lang, "btn_menu_back"))],
+             KeyboardButton(text=t(lang, "btn_ind_reminders"))],
+            [KeyboardButton(text=t(lang, "btn_menu_back"))],
         ],
         resize_keyboard=True,
     )
@@ -219,8 +218,8 @@ def client_card_keyboard(client_id: int, is_archived: bool, lang: str) -> Inline
          InlineKeyboardButton(text=t(lang, "btn_soap_note"),   callback_data=f"ca_{client_id}_soap")],
         [InlineKeyboardButton(text=t(lang, "btn_assign_hw"),   callback_data=f"ca_{client_id}_hw"),
          InlineKeyboardButton(text=t(lang, "btn_send_ci"),     callback_data=f"ca_{client_id}_ci")],
-        [InlineKeyboardButton(text=t(lang, "btn_sched_session"),callback_data=f"ca_{client_id}_sched"),
-         InlineKeyboardButton(text=t(lang, "btn_timeline"),    callback_data=f"ca_{client_id}_tl")],
+        [InlineKeyboardButton(text=t(lang, "btn_client_sessions"), callback_data=f"ics_{client_id}"),
+         InlineKeyboardButton(text=t(lang, "btn_timeline"),        callback_data=f"ca_{client_id}_tl")],
         [InlineKeyboardButton(text=t(lang, "btn_tags"),        callback_data=f"ca_{client_id}_tag"),
          InlineKeyboardButton(text=t(lang, "btn_engagement"),  callback_data=f"ca_{client_id}_eng")],
         [InlineKeyboardButton(text=t(lang, "btn_export"),      callback_data=f"ca_{client_id}_exp"),
@@ -463,6 +462,62 @@ def cohort_clear_field_keyboard(clear_cb: str, lang: str) -> InlineKeyboardMarku
         [InlineKeyboardButton(text=t(lang, "cs2_btn_clear"), callback_data=clear_cb)],
         [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
     ])
+
+
+# ── INDIVIDUAL_SESSION: keyboards ────────────────────────────────────────
+
+def client_session_list_keyboard(session_rows, client_id: int,
+                                 has_recurring: bool, lang: str) -> InlineKeyboardMarkup:
+    """INDIVIDUAL_SESSION: one button per upcoming session + add actions + back."""
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"isd_{sid}")]
+        for label, sid in session_rows
+    ]
+    rows.append([InlineKeyboardButton(text=t(lang, "is_btn_add_oneoff"),
+                                       callback_data=f"isoa_{client_id}")])
+    if not has_recurring:
+        rows.append([InlineKeyboardButton(text=t(lang, "is_btn_add_recurring"),
+                                           callback_data=f"isra_{client_id}")])
+    rows.append([InlineKeyboardButton(text=t(lang, "btn_back"),
+                                       callback_data=f"cc_{client_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def client_session_detail_keyboard(session_id: int, client_id: int,
+                                    recurring: bool, paused: bool,
+                                    lang: str) -> InlineKeyboardMarkup:
+    """INDIVIDUAL_SESSION: edit/delete actions for one session + recurrence controls."""
+    rows = [
+        [InlineKeyboardButton(text=t(lang, "is_btn_edit_dt"),    callback_data=f"isdt_{session_id}"),
+         InlineKeyboardButton(text=t(lang, "is_btn_edit_topic"), callback_data=f"istp_{session_id}")],
+        [InlineKeyboardButton(text=t(lang, "is_btn_edit_link"),  callback_data=f"islk_{session_id}"),
+         InlineKeyboardButton(text=t(lang, "is_btn_delete"),     callback_data=f"isdl_{session_id}")],
+    ]
+    if recurring:
+        pause_label = t(lang, "is_btn_resume") if paused else t(lang, "is_btn_pause")
+        rows.append([InlineKeyboardButton(text=pause_label, callback_data=f"ispz_{session_id}")])
+        rows.append([InlineKeyboardButton(text=t(lang, "is_btn_delete_rule"),
+                                           callback_data=f"isrl_{session_id}")])
+    rows.append([InlineKeyboardButton(text=t(lang, "is_btn_back_list"),
+                                       callback_data=f"ics_{client_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def client_ind_recurring_days_keyboard(selected, lang: str) -> InlineKeyboardMarkup:
+    """INDIVIDUAL_SESSION: weekday toggle picker for recurring session setup."""
+    rows = []
+    row = []
+    for i, key in enumerate(_DOW_KEYS):
+        mark = "✅ " if i in selected else ""
+        row.append(InlineKeyboardButton(text=f"{mark}{t(lang, key)}", callback_data=f"isrd_{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text=t(lang, "cs_recurring_days_done"), callback_data="isrd_done")])
+    rows.append([InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── FSM cancel ────────────────────────────────────────────────────────────

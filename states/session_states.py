@@ -14,3 +14,25 @@ class ScheduleSessionFromCardForm(StatesGroup):
 
 class RescheduleForm(StatesGroup):
     datetime_str = State()
+
+
+class IndividualSessionRecurringForm(StatesGroup):
+    """INDIVIDUAL_SESSION: FSM for setting up a recurring individual session."""
+    days = State()
+    time_ = State()
+    topic = State()
+    link = State()
+
+
+class IndividualSessionEditForm(StatesGroup):
+    """INDIVIDUAL_SESSION: FSM for editing one field of an individual session."""
+    datetime_ = State()
+    topic = State()
+    link = State()
+
+
+class IndividualOneOffForm(StatesGroup):
+    """INDIVIDUAL_SESSION: FSM for creating a one-off session from the sessions panel."""
+    datetime_ = State()
+    topic = State()
+    link = State()

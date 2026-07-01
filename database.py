@@ -260,6 +260,18 @@ async def migrate_db():
         session_cols = {row[1] for row in await cur.fetchall()}
         if "link" not in session_cols:
             await db.execute("ALTER TABLE sessions ADD COLUMN link TEXT")
+        if "topic" not in session_cols:
+            await db.execute("ALTER TABLE sessions ADD COLUMN topic TEXT DEFAULT ''")
+        if "recurring" not in session_cols:
+            await db.execute("ALTER TABLE sessions ADD COLUMN recurring INTEGER DEFAULT 0")
+        if "days_of_week" not in session_cols:
+            await db.execute("ALTER TABLE sessions ADD COLUMN days_of_week TEXT DEFAULT ''")
+
+        # clients — recurring_paused for individual recurring sessions
+        cur = await db.execute("PRAGMA table_info(clients)")
+        client_cols2 = {row[1] for row in await cur.fetchall()}
+        if "recurring_paused" not in client_cols2:
+            await db.execute("ALTER TABLE clients ADD COLUMN recurring_paused INTEGER DEFAULT 0")
 
         # RECURRING: cohort_sessions — recurring weekly sessions
         cur = await db.execute("PRAGMA table_info(cohort_sessions)")

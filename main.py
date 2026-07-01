@@ -49,6 +49,59 @@ def _cohort_checkin_kb(cohort_id: int, member_tg: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[row1, row2])
 
 
+# ── RECURRING_IND: daily generator for individual recurring sessions ────────
+
+async def generate_recurring_individual_sessions():
+    """Generate one-off session rows for all active individual recurring templates (next 30 days)."""
+    now = datetime.utcnow()
+    horizon = now + timedelta(days=30)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT s.id, s.psychologist_id, s.client_name, s.days_of_week, "
+            "s.scheduled_at, s.topic, s.link, p.tz_offset "
+            "FROM sessions s "
+            "JOIN psychologists p ON p.telegram_id = s.psychologist_id "
+            "JOIN clients c ON c.psychologist_id = s.psychologist_id "
+            "  AND c.name = s.client_name "
+            "WHERE s.recurring = 1 AND c.is_archived = 0 AND c.recurring_paused = 0"
+        )
+        templates = await cur.fetchall()
+        for sid, psych_id, client_name, days_csv, tpl_utc, topic, link, tz_offset in templates:
+            try:
+                day_idxs = [int(d) for d in (days_csv or "").split(",") if d.strip()]
+            except ValueError:
+                continue
+            if not day_idxs:
+                continue
+            try:
+                tpl_dt = datetime.strptime(tpl_utc, "%Y-%m-%d %H:%M")
+            except ValueError:
+                continue
+            tpl_local = tpl_dt + timedelta(minutes=(tz_offset or 0))
+            time_hh_mm = tpl_local.strftime("%H:%M")
+            check_date = now.date()
+            while check_date <= horizon.date():
+                if check_date.weekday() in day_idxs:
+                    local_dt_str = f"{check_date.strftime('%Y-%m-%d')} {time_hh_mm}"
+                    local_dt = datetime.strptime(local_dt_str, "%Y-%m-%d %H:%M")
+                    utc_dt = local_dt - timedelta(minutes=(tz_offset or 0))
+                    if utc_dt > now:
+                        utc_str = utc_dt.strftime("%Y-%m-%d %H:%M")
+                        cur2 = await db.execute(
+                            "SELECT 1 FROM sessions WHERE psychologist_id = ? "
+                            "AND client_name = ? AND scheduled_at = ? AND recurring = 0",
+                            (psych_id, client_name, utc_str))
+                        if not await cur2.fetchone():
+                            await db.execute(
+                                "INSERT INTO sessions "
+                                "(psychologist_id, client_name, scheduled_at, topic, link) "
+                                "VALUES (?, ?, ?, ?, ?)",
+                                (psych_id, client_name, utc_str, topic or "", link or ""))
+                check_date += timedelta(days=1)
+        await db.commit()
+    log.info("RECURRING_IND: individual recurring sessions generated")
+
+
 # ── Background: reminder loop ──────────────────────────────────────────────
 _last_recurring_gen_date = None  # RECURRING: tracks last date the daily generator ran
 
@@ -65,6 +118,7 @@ async def reminder_loop():
             if _last_recurring_gen_date != today:
                 try:
                     await generate_recurring_cohort_sessions()
+                    await generate_recurring_individual_sessions()  # RECURRING_IND
                 finally:
                     _last_recurring_gen_date = today
 

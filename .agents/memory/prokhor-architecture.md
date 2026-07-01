@@ -75,6 +75,15 @@ Use `bot: Bot` parameter in handlers (aiogram 3.x auto-injects). Never use a glo
 ## states/__init__.py
 All FSM state classes from all state files must be listed in `states/__init__.py` `__all__`. Missing exports cause ImportError.
 
+## Individual client sessions (per-client session management)
+- New module: `handlers/client_sessions.py` with `router` registered in `handlers/__init__.py` **before** `clients.router` to avoid prefix collision.
+- Entry point: `ics_{client_id}` callback from client card "📅 Sessions" button (replaces old `ca_{id}_sched` one-shot button).
+- Callback prefixes: `ics_` (list), `isd_` (detail), `isdt_/istp_/islk_` (edit dt/topic/link), `isdl_/isdy_` (delete ask/confirm), `ispz_` (pause/resume), `isrl_/isry_` (delete-rule ask/confirm), `isoa_` (add one-off), `isra_` (add recurring), `isrd_{n}/isrd_done` (weekday toggle).
+- DB: `sessions` gained `topic TEXT`, `recurring INTEGER`, `days_of_week TEXT` columns; `clients` gained `recurring_paused INTEGER`. All added via `migrate_db()`.
+- Recurring template: a `sessions` row with `recurring=1` is the rule; generated one-offs have `recurring=0`. `clients.recurring_paused` pauses generation. Daily generator: `generate_recurring_individual_sessions()` in `main.py`, called alongside the cohort generator in `reminder_loop()`.
+- Individual menu: `btn_ind_schedule` row removed; `individual_menu_keyboard` is now 2 rows + Back.
+- Client card back button from session list: `cc_{client_id}` (not `cl_{n}` which is page navigation).
+
 ## Recurring cohort sessions
 - `cohort_sessions` has `recurring` (0/1) + `days_of_week` (CSV of Python weekday ints, Mon=0) columns; added via migration in `database.py migrate_db()`.
 - Template-based generation: per cohort, the most recently created (`MAX(id)`) row with `recurring=1` supplies time/topic/link/days for generating future occurrences — there's no separate "schedule rule" table, the last recurring session row *is* the rule.
