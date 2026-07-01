@@ -375,15 +375,13 @@ def cohort_action_keyboard(cohort_id: int, lang: str) -> InlineKeyboardMarkup:
     cid = cohort_id
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "cv2_members"),    callback_data=f"cv2_mem_{cid}"),
-         InlineKeyboardButton(text=t(lang, "cv2_schedule"),   callback_data=f"cv2_sched_{cid}")],
+         InlineKeyboardButton(text=t(lang, "cv2_sessions"),   callback_data=f"cv2_slist_{cid}")],
         [InlineKeyboardButton(text=t(lang, "cv2_attendance"), callback_data=f"cv2_att_{cid}"),
          InlineKeyboardButton(text=t(lang, "cv2_checkins"),   callback_data=f"cv2_ci_{cid}")],
         [InlineKeyboardButton(text=t(lang, "cv2_notes"),      callback_data=f"cv2_notes_{cid}"),
          InlineKeyboardButton(text=t(lang, "cv2_broadcast"),  callback_data=f"cv2_bc_{cid}")],
         [InlineKeyboardButton(text=t(lang, "cv2_stats"),      callback_data=f"cv2_stats_{cid}"),
          InlineKeyboardButton(text=t(lang, "cv2_archive"),    callback_data=f"cv2_arch_{cid}")],
-        [InlineKeyboardButton(text=t(lang, "cv2_sessions"),   callback_data=f"cv2_slist_{cid}"),
-         InlineKeyboardButton(text=t(lang, "cv2_recurring"),  callback_data=f"cv2_rsched_{cid}")],
         [InlineKeyboardButton(text=t(lang, "cv2_back"),       callback_data="cv2_coh_list")],
     ])
 

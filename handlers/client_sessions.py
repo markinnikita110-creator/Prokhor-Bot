@@ -11,7 +11,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 
-from database import DB_PATH
+from database import DB_PATH, get_user_lang, get_user_timezone, utc_to_local, local_to_utc
 from keyboards import (
     client_session_list_keyboard,
     client_session_detail_keyboard,
@@ -30,32 +30,15 @@ router = Router(name="client_sessions")
 _DOW_KEYS = ["dow_mon", "dow_tue", "dow_wed", "dow_thu", "dow_fri", "dow_sat", "dow_sun"]
 
 
-# ── DB helpers ─────────────────────────────────────────────────────────────
+# ── DB helpers (use the canonical database.py helpers for lang/tz) ─────────
 
-async def _get_user_lang(psych_id: int) -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT lang FROM psychologists WHERE telegram_id = ?", (psych_id,))
-        row = await cur.fetchone()
-    return (row[0] if row else None) or "en"
+async def _lang(psych_id: int) -> str:
+    return await get_user_lang(psych_id)
 
 
-async def _get_user_tz_offset(psych_id: int) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT tz_offset FROM psychologists WHERE telegram_id = ?", (psych_id,))
-        row = await cur.fetchone()
-    return (row[0] if row else None) or 0
-
-
-def _utc_to_local(dt_utc_str: str, offset_min: int) -> str:
-    dt = datetime.strptime(dt_utc_str, "%Y-%m-%d %H:%M") + timedelta(minutes=offset_min)
-    return dt.strftime("%Y-%m-%d %H:%M")
-
-
-def _local_to_utc(dt_local_str: str, offset_min: int) -> str:
-    dt = datetime.strptime(dt_local_str, "%Y-%m-%d %H:%M") - timedelta(minutes=offset_min)
-    return dt.strftime("%Y-%m-%d %H:%M")
+async def _tz_offset(psych_id: int) -> int:
+    _, offset = await get_user_timezone(psych_id)
+    return offset
 
 
 async def _get_client_by_id(client_id: int):
@@ -66,12 +49,12 @@ async def _get_client_by_id(client_id: int):
         return await cur.fetchone()
 
 
-async def _get_client_by_name(psych_id: int, name: str):
+async def _get_client_by_name(psych_id: int, client_name: str):
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT id, psychologist_id, name, recurring_paused FROM clients "
             "WHERE psychologist_id = ? AND name = ?",
-            (psych_id, name))
+            (psych_id, client_name))
         return await cur.fetchone()
 
 
@@ -98,27 +81,35 @@ async def _get_session(session_id: int):
         return await cur.fetchone()
 
 
-def _format_session_label(sess, offset_min: int, lang: str) -> str:
+# ── Label helpers ──────────────────────────────────────────────────────────
+
+def _dow_label(dow_csv: str, lang: str) -> str:
+    try:
+        labels = [t(lang, _DOW_KEYS[int(d)]) for d in (dow_csv or "").split(",") if d.strip()]
+    except (ValueError, IndexError):
+        labels = []
+    return "/".join(labels) if labels else "?"
+
+
+def _format_session_btn(sess, offset_min: int, lang: str) -> str:
     sid, sched_utc, topic, link, recurring, dow = sess
     if recurring:
-        dow_labels = [t(lang, _DOW_KEYS[int(d)])
-                      for d in (dow or "").split(",") if d.strip()]
-        label = "🔁 " + "/".join(dow_labels) if dow_labels else "🔁 ?"
+        label = f"🔁 {_dow_label(dow, lang)}"
         if topic:
             label += f" · {topic[:20]}"
         return label
-    local = _utc_to_local(sched_utc, offset_min)
+    local = utc_to_local(sched_utc, offset_min)
     try:
         dt = datetime.strptime(local, "%Y-%m-%d %H:%M")
-        label = dt.strftime("%d %b %H:%M")
+        label = f"📅 {dt.strftime('%d %b %H:%M')}"
     except ValueError:
-        label = local
+        label = f"📅 {local}"
     if topic:
         label += f" · {topic[:20]}"
     return label
 
 
-# ── Generate upcoming sessions inline (used after recurring setup) ─────────
+# ── Generate upcoming one-off sessions from a recurring rule ───────────────
 
 async def _generate_upcoming(psych_id: int, client_name: str,
                               selected_days: list, time_local: str,
@@ -130,7 +121,7 @@ async def _generate_upcoming(psych_id: int, client_name: str,
         while check_date <= horizon.date():
             if check_date.weekday() in selected_days:
                 local_dt_str = f"{check_date.strftime('%Y-%m-%d')} {time_local}"
-                utc_str = _local_to_utc(local_dt_str, offset_min)
+                utc_str = local_to_utc(local_dt_str, offset_min)
                 dt_utc = datetime.strptime(utc_str, "%Y-%m-%d %H:%M")
                 if dt_utc > now:
                     cur = await db.execute(
@@ -147,43 +138,39 @@ async def _generate_upcoming(psych_id: int, client_name: str,
         await db.commit()
 
 
-# ── Sessions list ──────────────────────────────────────────────────────────
+# ── Shared render helpers ──────────────────────────────────────────────────
 
-async def _show_sessions_list(msg_or_cb, psych_id: int, client_id: int,
-                               lang: str, offset: int, edit: bool = True):
+async def _show_sessions_list(cb: CallbackQuery, psych_id: int, client_id: int,
+                               lang: str, offset: int):
     client = await _get_client_by_id(client_id)
     if not client:
-        if isinstance(msg_or_cb, CallbackQuery):
-            await msg_or_cb.answer("Client not found.")
+        await cb.answer(t(lang, "client_not_found", name="?"), show_alert=True)
         return
     _, _, client_name, _ = client
     sessions = await _get_sessions_for_client(psych_id, client_name)
-    session_rows = [(_format_session_label(s, offset, lang), s[0]) for s in sessions]
+    session_rows = [(_format_session_btn(s, offset, lang), s[0]) for s in sessions]
     has_recurring = any(s[4] == 1 for s in sessions)
     kb = client_session_list_keyboard(session_rows, client_id, has_recurring, lang)
-    text = (t(lang, "is_sessions_title", client=client_name) if sessions
-            else t(lang, "is_sessions_empty", client=client_name))
-    if isinstance(msg_or_cb, CallbackQuery):
-        if edit:
-            await msg_or_cb.message.edit_text(text, reply_markup=kb)
-        else:
-            await msg_or_cb.message.answer(text, reply_markup=kb)
-    else:
-        await msg_or_cb.answer(text, reply_markup=kb)
+    text = (t(lang, "is_sessions_title", client=client_name)
+            if sessions else t(lang, "is_sessions_empty", client=client_name))
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
 
 
-async def _show_session_detail_msg(cb: CallbackQuery, session_id: int,
-                                    psych_id: int, lang: str, offset: int):
+async def _show_session_detail(cb: CallbackQuery, session_id: int,
+                                psych_id: int, lang: str, offset: int):
     sess = await _get_session(session_id)
     if not sess:
-        await cb.answer(t(lang, "is_not_found"))
+        await cb.answer(t(lang, "is_not_found"), show_alert=True)
         return
     sid, s_psych_id, client_name, sched_utc, topic, link, recurring, dow = sess
     client = await _get_client_by_name(s_psych_id, client_name)
     client_id = client[0] if client else 0
     paused_flag = bool(client[3]) if client else False
 
-    local_dt = _utc_to_local(sched_utc, offset)
+    local_dt = utc_to_local(sched_utc, offset)
     try:
         dt = datetime.strptime(local_dt, "%Y-%m-%d %H:%M")
         date_display = dt.strftime("%A, %d %b %Y · %H:%M")
@@ -197,47 +184,50 @@ async def _show_session_detail_msg(cb: CallbackQuery, session_id: int,
     if link:
         lines.append(t(lang, "is_detail_link", link=link))
     if recurring:
-        dow_labels = [t(lang, _DOW_KEYS[int(d)])
-                      for d in (dow or "").split(",") if d.strip()]
-        lines.append(t(lang, "is_detail_recurring", days="/".join(dow_labels)))
+        lines.append(t(lang, "is_detail_recurring", days=_dow_label(dow, lang)))
         if paused_flag:
             lines.append(t(lang, "is_detail_paused"))
 
     kb = client_session_detail_keyboard(session_id, client_id, bool(recurring), paused_flag, lang)
-    await cb.message.edit_text("\n".join(lines), reply_markup=kb)
+    try:
+        await cb.message.edit_text("\n".join(lines), reply_markup=kb)
+    except Exception:
+        await cb.message.answer("\n".join(lines), reply_markup=kb)
 
 
-@router.callback_query(F.data.regexp(r"^ics_(\d+)$"))
+# ── Sessions list ──────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("ics_"))
 async def show_client_sessions(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     psych_id = cb.from_user.id
-    client_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
-    offset = await _get_user_tz_offset(psych_id)
-    await _show_sessions_list(cb, psych_id, client_id, lang, offset, edit=True)
+    client_id = int(cb.data[len("ics_"):])
+    lang = await _lang(psych_id)
+    offset = await _tz_offset(psych_id)
+    await _show_sessions_list(cb, psych_id, client_id, lang, offset)
     await cb.answer()
 
 
 # ── Session detail ─────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^isd_(\d+)$"))
+@router.callback_query(F.data.startswith("isd_"))
 async def show_session_detail(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
-    offset = await _get_user_tz_offset(psych_id)
-    await _show_session_detail_msg(cb, session_id, psych_id, lang, offset)
+    session_id = int(cb.data[len("isd_"):])
+    lang = await _lang(psych_id)
+    offset = await _tz_offset(psych_id)
+    await _show_session_detail(cb, session_id, psych_id, lang, offset)
     await cb.answer()
 
 
 # ── Edit date/time ─────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^isdt_(\d+)$"))
+@router.callback_query(F.data.startswith("isdt_"))
 async def edit_dt_start(cb: CallbackQuery, state: FSMContext):
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
+    session_id = int(cb.data[len("isdt_"):])
+    lang = await _lang(psych_id)
     await state.set_state(IndividualSessionEditForm.datetime_)
     await state.update_data(session_id=session_id)
     await cb.message.edit_text(t(lang, "is_ask_datetime_new"))
@@ -247,19 +237,18 @@ async def edit_dt_start(cb: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(IndividualSessionEditForm.datetime_))
 async def edit_dt_save(msg: Message, state: FSMContext):
     psych_id = msg.from_user.id
-    lang = await _get_user_lang(psych_id)
-    offset = await _get_user_tz_offset(psych_id)
+    lang = await _lang(psych_id)
+    offset = await _tz_offset(psych_id)
     try:
         datetime.strptime(msg.text.strip(), "%Y-%m-%d %H:%M")
     except ValueError:
         await msg.answer(t(lang, "err_invalid_datetime"))
         return
     data = await state.get_data()
-    session_id = data["session_id"]
-    utc_str = _local_to_utc(msg.text.strip(), offset)
+    utc_str = local_to_utc(msg.text.strip(), offset)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE sessions SET scheduled_at = ? WHERE id = ?",
-                         (utc_str, session_id))
+                         (utc_str, data["session_id"]))
         await db.commit()
     await state.clear()
     await msg.answer(t(lang, "is_updated_dt"))
@@ -267,11 +256,11 @@ async def edit_dt_save(msg: Message, state: FSMContext):
 
 # ── Edit topic ─────────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^istp_(\d+)$"))
+@router.callback_query(F.data.startswith("istp_"))
 async def edit_topic_start(cb: CallbackQuery, state: FSMContext):
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
+    session_id = int(cb.data[len("istp_"):])
+    lang = await _lang(psych_id)
     await state.set_state(IndividualSessionEditForm.topic)
     await state.update_data(session_id=session_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -283,8 +272,7 @@ async def edit_topic_start(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "istpclear", StateFilter(IndividualSessionEditForm.topic))
 async def edit_topic_clear(cb: CallbackQuery, state: FSMContext):
-    psych_id = cb.from_user.id
-    lang = await _get_user_lang(psych_id)
+    lang = await _lang(cb.from_user.id)
     data = await state.get_data()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE sessions SET topic = '' WHERE id = ?", (data["session_id"],))
@@ -296,8 +284,7 @@ async def edit_topic_clear(cb: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(IndividualSessionEditForm.topic))
 async def edit_topic_save(msg: Message, state: FSMContext):
-    psych_id = msg.from_user.id
-    lang = await _get_user_lang(psych_id)
+    lang = await _lang(msg.from_user.id)
     data = await state.get_data()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE sessions SET topic = ? WHERE id = ?",
@@ -309,11 +296,11 @@ async def edit_topic_save(msg: Message, state: FSMContext):
 
 # ── Edit link ──────────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^islk_(\d+)$"))
+@router.callback_query(F.data.startswith("islk_"))
 async def edit_link_start(cb: CallbackQuery, state: FSMContext):
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
+    session_id = int(cb.data[len("islk_"):])
+    lang = await _lang(psych_id)
     await state.set_state(IndividualSessionEditForm.link)
     await state.update_data(session_id=session_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -325,8 +312,7 @@ async def edit_link_start(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "islkclear", StateFilter(IndividualSessionEditForm.link))
 async def edit_link_clear(cb: CallbackQuery, state: FSMContext):
-    psych_id = cb.from_user.id
-    lang = await _get_user_lang(psych_id)
+    lang = await _lang(cb.from_user.id)
     data = await state.get_data()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE sessions SET link = '' WHERE id = ?", (data["session_id"],))
@@ -338,8 +324,7 @@ async def edit_link_clear(cb: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(IndividualSessionEditForm.link))
 async def edit_link_save(msg: Message, state: FSMContext):
-    psych_id = msg.from_user.id
-    lang = await _get_user_lang(psych_id)
+    lang = await _lang(msg.from_user.id)
     data = await state.get_data()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE sessions SET link = ? WHERE id = ?",
@@ -351,37 +336,35 @@ async def edit_link_save(msg: Message, state: FSMContext):
 
 # ── Delete session ─────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^isdl_(\d+)$"))
+@router.callback_query(F.data.startswith("isdl_"))
 async def delete_session_ask(cb: CallbackQuery):
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
-    offset = await _get_user_tz_offset(psych_id)
+    session_id = int(cb.data[len("isdl_"):])
+    lang = await _lang(psych_id)
+    offset = await _tz_offset(psych_id)
     sess = await _get_session(session_id)
     if not sess:
-        await cb.answer(t(lang, "is_not_found"))
+        await cb.answer(t(lang, "is_not_found"), show_alert=True)
         return
-    local_dt = _utc_to_local(sess[3], offset)
+    local_dt = utc_to_local(sess[3], offset)
     try:
         dt = datetime.strptime(local_dt, "%Y-%m-%d %H:%M")
         date_display = dt.strftime("%d %b %Y %H:%M")
     except ValueError:
         date_display = local_dt
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "is_delete_yes"),
-                             callback_data=f"isdy_{session_id}"),
-        InlineKeyboardButton(text=t(lang, "is_delete_no"),
-                             callback_data=f"isd_{session_id}"),
+        InlineKeyboardButton(text=t(lang, "is_delete_yes"), callback_data=f"isdy_{session_id}"),
+        InlineKeyboardButton(text=t(lang, "is_delete_no"),  callback_data=f"isd_{session_id}"),
     ]])
     await cb.message.edit_text(t(lang, "is_delete_confirm", date=date_display), reply_markup=kb)
     await cb.answer()
 
 
-@router.callback_query(F.data.regexp(r"^isdy_(\d+)$"))
+@router.callback_query(F.data.startswith("isdy_"))
 async def delete_session_confirm(cb: CallbackQuery):
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
+    session_id = int(cb.data[len("isdy_"):])
+    lang = await _lang(psych_id)
     sess = await _get_session(session_id)
     client_id = 0
     if sess:
@@ -400,22 +383,21 @@ async def delete_session_confirm(cb: CallbackQuery):
 
 # ── Pause / Resume recurrence ──────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^ispz_(\d+)$"))
+@router.callback_query(F.data.startswith("ispz_"))
 async def toggle_pause(cb: CallbackQuery):
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
-    offset = await _get_user_tz_offset(psych_id)
+    session_id = int(cb.data[len("ispz_"):])
+    lang = await _lang(psych_id)
+    offset = await _tz_offset(psych_id)
     sess = await _get_session(session_id)
     if not sess:
-        await cb.answer(t(lang, "is_not_found"))
+        await cb.answer(t(lang, "is_not_found"), show_alert=True)
         return
-    _, s_psych_id, client_name, _, _, _, _, _ = sess
-    client = await _get_client_by_name(s_psych_id, client_name)
+    client = await _get_client_by_name(sess[1], sess[2])
     if not client:
         await cb.answer()
         return
-    client_id, _, _, paused = client
+    client_id, _, client_name, paused = client
     new_paused = 0 if paused else 1
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE clients SET recurring_paused = ? WHERE id = ?",
@@ -424,37 +406,33 @@ async def toggle_pause(cb: CallbackQuery):
     alert = (t(lang, "is_paused_ok", client=client_name) if new_paused
              else t(lang, "is_resumed_ok", client=client_name))
     await cb.answer(alert, show_alert=True)
-    await _show_session_detail_msg(cb, session_id, psych_id, lang, offset)
+    await _show_session_detail(cb, session_id, psych_id, lang, offset)
 
 
 # ── Delete recurrence rule ─────────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^isrl_(\d+)$"))
+@router.callback_query(F.data.startswith("isrl_"))
 async def delete_rule_ask(cb: CallbackQuery):
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
+    session_id = int(cb.data[len("isrl_"):])
+    lang = await _lang(psych_id)
     sess = await _get_session(session_id)
     if not sess:
-        await cb.answer(t(lang, "is_not_found"))
+        await cb.answer(t(lang, "is_not_found"), show_alert=True)
         return
-    client_name = sess[2]
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "is_delrule_yes"),
-                             callback_data=f"isry_{session_id}"),
-        InlineKeyboardButton(text=t(lang, "is_delrule_no"),
-                             callback_data=f"isd_{session_id}"),
+        InlineKeyboardButton(text=t(lang, "is_delrule_yes"), callback_data=f"isry_{session_id}"),
+        InlineKeyboardButton(text=t(lang, "is_delrule_no"),  callback_data=f"isd_{session_id}"),
     ]])
-    await cb.message.edit_text(t(lang, "is_delrule_confirm", client=client_name),
-                                reply_markup=kb)
+    await cb.message.edit_text(t(lang, "is_delrule_confirm", client=sess[2]), reply_markup=kb)
     await cb.answer()
 
 
-@router.callback_query(F.data.regexp(r"^isry_(\d+)$"))
+@router.callback_query(F.data.startswith("isry_"))
 async def delete_rule_confirm(cb: CallbackQuery):
     psych_id = cb.from_user.id
-    session_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
+    session_id = int(cb.data[len("isry_"):])
+    lang = await _lang(psych_id)
     sess = await _get_session(session_id)
     client_id = 0
     if sess:
@@ -463,8 +441,7 @@ async def delete_rule_confirm(cb: CallbackQuery):
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             if client_id:
-                await db.execute("UPDATE clients SET recurring_paused = 0 WHERE id = ?",
-                                 (client_id,))
+                await db.execute("UPDATE clients SET recurring_paused = 0 WHERE id = ?", (client_id,))
             await db.commit()
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "is_btn_back_list"),
@@ -476,11 +453,11 @@ async def delete_rule_confirm(cb: CallbackQuery):
 
 # ── One-off session ────────────────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^isoa_(\d+)$"))
+@router.callback_query(F.data.startswith("isoa_"))
 async def add_oneoff_start(cb: CallbackQuery, state: FSMContext):
     psych_id = cb.from_user.id
-    client_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
+    client_id = int(cb.data[len("isoa_"):])
+    lang = await _lang(psych_id)
     client = await _get_client_by_id(client_id)
     if not client:
         await cb.answer()
@@ -494,14 +471,14 @@ async def add_oneoff_start(cb: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(IndividualOneOffForm.datetime_))
 async def add_oneoff_datetime(msg: Message, state: FSMContext):
     psych_id = msg.from_user.id
-    lang = await _get_user_lang(psych_id)
-    offset = await _get_user_tz_offset(psych_id)
+    lang = await _lang(psych_id)
+    offset = await _tz_offset(psych_id)
     try:
         datetime.strptime(msg.text.strip(), "%Y-%m-%d %H:%M")
     except ValueError:
         await msg.answer(t(lang, "err_invalid_datetime"))
         return
-    utc_str = _local_to_utc(msg.text.strip(), offset)
+    utc_str = local_to_utc(msg.text.strip(), offset)
     await state.update_data(scheduled_at=utc_str)
     await state.set_state(IndividualOneOffForm.topic)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -514,7 +491,7 @@ async def add_oneoff_datetime(msg: Message, state: FSMContext):
 async def add_oneoff_topic_skip(cb: CallbackQuery, state: FSMContext):
     await state.update_data(topic="")
     await state.set_state(IndividualOneOffForm.link)
-    lang = await _get_user_lang(cb.from_user.id)
+    lang = await _lang(cb.from_user.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "btn_skip"), callback_data="isoalnkskip")
     ]])
@@ -526,7 +503,7 @@ async def add_oneoff_topic_skip(cb: CallbackQuery, state: FSMContext):
 async def add_oneoff_topic(msg: Message, state: FSMContext):
     await state.update_data(topic=msg.text.strip())
     await state.set_state(IndividualOneOffForm.link)
-    lang = await _get_user_lang(msg.from_user.id)
+    lang = await _lang(msg.from_user.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "btn_skip"), callback_data="isoalnkskip")
     ]])
@@ -548,8 +525,8 @@ async def add_oneoff_link(msg: Message, state: FSMContext):
 async def _save_oneoff(trigger, state: FSMContext):
     is_cb = isinstance(trigger, CallbackQuery)
     psych_id = trigger.from_user.id
-    lang = await _get_user_lang(psych_id)
-    offset = await _get_user_tz_offset(psych_id)
+    lang = await _lang(psych_id)
+    offset = await _tz_offset(psych_id)
     data = await state.get_data()
     await state.clear()
     client_id = data["client_id"]
@@ -564,15 +541,14 @@ async def _save_oneoff(trigger, state: FSMContext):
             "VALUES (?, ?, ?, ?, ?)",
             (psych_id, client_name, scheduled_at, topic, link))
         await db.commit()
-    local_dt = _utc_to_local(scheduled_at, offset)
+    local_dt = utc_to_local(scheduled_at, offset)
     try:
         dt = datetime.strptime(local_dt, "%Y-%m-%d %H:%M")
         date_display = dt.strftime("%d %b %Y · %H:%M")
     except ValueError:
         date_display = local_dt
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "is_btn_back_list"),
-                             callback_data=f"ics_{client_id}")
+        InlineKeyboardButton(text=t(lang, "is_btn_back_list"), callback_data=f"ics_{client_id}")
     ]])
     text = t(lang, "is_session_created", client=client_name, date=date_display)
     if is_cb:
@@ -584,11 +560,11 @@ async def _save_oneoff(trigger, state: FSMContext):
 
 # ── Recurring session setup ────────────────────────────────────────────────
 
-@router.callback_query(F.data.regexp(r"^isra_(\d+)$"))
+@router.callback_query(F.data.startswith("isra_"))
 async def add_recurring_start(cb: CallbackQuery, state: FSMContext):
     psych_id = cb.from_user.id
-    client_id = int(cb.data.split("_")[1])
-    lang = await _get_user_lang(psych_id)
+    client_id = int(cb.data[len("isra_"):])
+    lang = await _lang(psych_id)
     client = await _get_client_by_id(client_id)
     if not client:
         await cb.answer()
@@ -601,12 +577,19 @@ async def add_recurring_start(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-@router.callback_query(F.data.regexp(r"^isrd_(\d+)$"),
+@router.callback_query(F.data.startswith("isrd_"),
                         StateFilter(IndividualSessionRecurringForm.days))
 async def toggle_recurring_day(cb: CallbackQuery, state: FSMContext):
-    psych_id = cb.from_user.id
-    lang = await _get_user_lang(psych_id)
-    day_idx = int(cb.data.split("_")[1])
+    payload = cb.data[len("isrd_"):]
+    if payload == "done":
+        await _recurring_days_done(cb, state)
+        return
+    lang = await _lang(cb.from_user.id)
+    try:
+        day_idx = int(payload)
+    except ValueError:
+        await cb.answer()
+        return
     data = await state.get_data()
     selected = list(data.get("selected_days", []))
     if day_idx in selected:
@@ -619,11 +602,8 @@ async def toggle_recurring_day(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-@router.callback_query(F.data == "isrd_done",
-                        StateFilter(IndividualSessionRecurringForm.days))
-async def recurring_days_done(cb: CallbackQuery, state: FSMContext):
-    psych_id = cb.from_user.id
-    lang = await _get_user_lang(psych_id)
+async def _recurring_days_done(cb: CallbackQuery, state: FSMContext):
+    lang = await _lang(cb.from_user.id)
     data = await state.get_data()
     selected = data.get("selected_days", [])
     if not selected:
@@ -636,8 +616,7 @@ async def recurring_days_done(cb: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(IndividualSessionRecurringForm.time_))
 async def recurring_time(msg: Message, state: FSMContext):
-    psych_id = msg.from_user.id
-    lang = await _get_user_lang(psych_id)
+    lang = await _lang(msg.from_user.id)
     try:
         datetime.strptime(msg.text.strip(), "%H:%M")
     except ValueError:
@@ -656,7 +635,7 @@ async def recurring_time(msg: Message, state: FSMContext):
 async def recurring_topic_skip(cb: CallbackQuery, state: FSMContext):
     await state.update_data(topic="")
     await state.set_state(IndividualSessionRecurringForm.link)
-    lang = await _get_user_lang(cb.from_user.id)
+    lang = await _lang(cb.from_user.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "btn_skip"), callback_data="isrlnkskip")
     ]])
@@ -668,7 +647,7 @@ async def recurring_topic_skip(cb: CallbackQuery, state: FSMContext):
 async def recurring_topic(msg: Message, state: FSMContext):
     await state.update_data(topic=msg.text.strip())
     await state.set_state(IndividualSessionRecurringForm.link)
-    lang = await _get_user_lang(msg.from_user.id)
+    lang = await _lang(msg.from_user.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "btn_skip"), callback_data="isrlnkskip")
     ]])
@@ -691,8 +670,8 @@ async def recurring_link(msg: Message, state: FSMContext):
 async def _save_recurring(trigger, state: FSMContext):
     is_cb = isinstance(trigger, CallbackQuery)
     psych_id = trigger.from_user.id
-    lang = await _get_user_lang(psych_id)
-    offset = await _get_user_tz_offset(psych_id)
+    lang = await _lang(psych_id)
+    offset = await _tz_offset(psych_id)
     data = await state.get_data()
     await state.clear()
     client_id = data["client_id"]
@@ -703,7 +682,7 @@ async def _save_recurring(trigger, state: FSMContext):
     link = data.get("link", "")
 
     today = datetime.utcnow().date()
-    utc_template = _local_to_utc(f"{today.strftime('%Y-%m-%d')} {time_local}", offset)
+    utc_template = local_to_utc(f"{today.strftime('%Y-%m-%d')} {time_local}", offset)
     days_csv = ",".join(str(d) for d in selected_days)
     dow_labels = [t(lang, _DOW_KEYS[d]) for d in selected_days]
 
@@ -719,12 +698,10 @@ async def _save_recurring(trigger, state: FSMContext):
         await db.execute("UPDATE clients SET recurring_paused = 0 WHERE id = ?", (client_id,))
         await db.commit()
 
-    await _generate_upcoming(psych_id, client_name, selected_days,
-                              time_local, offset, topic, link)
+    await _generate_upcoming(psych_id, client_name, selected_days, time_local, offset, topic, link)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "is_btn_back_list"),
-                             callback_data=f"ics_{client_id}")
+        InlineKeyboardButton(text=t(lang, "is_btn_back_list"), callback_data=f"ics_{client_id}")
     ]])
     text = t(lang, "is_recurring_created",
              client=client_name, days="/".join(dow_labels), time=time_local)
