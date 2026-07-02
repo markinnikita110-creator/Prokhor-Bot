@@ -336,9 +336,11 @@ def checkin_score_keyboard(client_id: int) -> InlineKeyboardMarkup:
 # ── Settings section ───────────────────────────────────────────────────────
 
 def settings_keyboard(lang: str) -> InlineKeyboardMarkup:
+    plan_label = "📦 Мой тариф" if lang == "ru" else "📦 My plan"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "btn_language"), callback_data="st_lang")],
         [InlineKeyboardButton(text=t(lang, "btn_timezone"), callback_data="st_tz")],
+        [InlineKeyboardButton(text=plan_label,              callback_data="st_myplan")],
         [InlineKeyboardButton(text=t(lang, "btn_about"),    callback_data="st_about")],
         [InlineKeyboardButton(text=t(lang, "btn_main_menu"),callback_data="m_home")],
     ])

@@ -1,9 +1,14 @@
-from . import legal, menu, clients, sessions, homework, notes, analytics, checkins, settings, timezone, cohorts, supervision, client_sessions  # COHORT_V2
+from . import (  # noqa: F401
+    legal, menu, clients, sessions, homework, notes,
+    analytics, checkins, settings, timezone,
+    cohorts, supervision, client_sessions, plans,
+)
 
 routers = [
-    legal.router,  # LEGAL: must be first so consent callbacks fire before menu routing
+    legal.router,           # LEGAL: consent callbacks first
     menu.router,
-    client_sessions.router,  # INDIVIDUAL_SESSION: before clients.router so ics_/isd_/etc. take priority
+    plans.router,           # PLANS: /promo, /myplan, st_myplan before settings
+    client_sessions.router, # INDIVIDUAL_SESSION: ics_/isd_/etc. before clients
     clients.router,
     sessions.router,
     homework.router,
@@ -12,6 +17,6 @@ routers = [
     checkins.router,
     settings.router,
     timezone.router,
-    cohorts.router,    # COHORT
-    supervision.router,  # COHORT_V2
+    cohorts.router,
+    supervision.router,
 ]

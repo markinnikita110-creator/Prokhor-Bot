@@ -452,8 +452,15 @@ async def cohort_got_max(message: Message, state: FSMContext):
 
 @router.callback_query(CohortCreateForm.type_, F.data.startswith("cohort_type_"))
 async def cohort_got_type(callback: CallbackQuery, state: FSMContext):
+    from plan_limits import check_plan_limit
     lang = await get_user_lang(callback.from_user.id)
     uid = callback.from_user.id
+    allowed, err_msg = await check_plan_limit(uid, "add_cohort", lang=lang)
+    if not allowed:
+        await state.clear()
+        await callback.answer()
+        await callback.message.answer(err_msg)
+        return
     type_map = {
         "cohort_type_course":      ("course",      t(lang, "btn_cohort_type_course")),
         "cohort_type_group":       ("group",        t(lang, "btn_cohort_type_group")),
@@ -517,6 +524,12 @@ async def cohort_join_confirm(callback: CallbackQuery):
         return
     if await _get_member_count(cohort_id) >= max_p:
         await callback.answer(t(lang, "cohort_full"), show_alert=True)
+        return
+    from plan_limits import check_plan_limit
+    allowed, err_msg = await check_plan_limit(psych_id, "add_cohort_member",
+                                               cohort_id=cohort_id, lang=lang)
+    if not allowed:
+        await callback.answer(err_msg, show_alert=True)
         return
     first_name = callback.from_user.first_name or f"user_{uid}"
     await _add_member(cohort_id, uid, first_name)
@@ -1162,6 +1175,14 @@ async def cv2_addmem_got_name(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
         await message.answer(t(lang, "cv2_add_member_ask"))
+        return
+    from plan_limits import check_plan_limit
+    psych_id = message.from_user.id
+    allowed, err_msg = await check_plan_limit(psych_id, "add_cohort_member",
+                                               cohort_id=cid, lang=lang)
+    if not allowed:
+        await state.clear()
+        await message.answer(err_msg)
         return
     manual_tg_id = await _get_next_manual_id(cid)
     async with aiosqlite.connect(DB_PATH) as db:

@@ -223,6 +223,24 @@ async def init_db():
                 accepted_at TEXT NOT NULL,
                 version     TEXT NOT NULL DEFAULT '1.0'
             );
+
+            -- PLANS: user tariff plans
+            CREATE TABLE IF NOT EXISTS user_plans (
+                user_id     INTEGER PRIMARY KEY,
+                plan        TEXT NOT NULL DEFAULT 'start',
+                expires_at  TEXT,
+                updated_at  TEXT NOT NULL
+            );
+
+            -- PLANS: promo codes
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code          TEXT PRIMARY KEY,
+                plan          TEXT NOT NULL,
+                duration_days INTEGER,
+                max_uses      INTEGER,
+                used_count    INTEGER NOT NULL DEFAULT 0,
+                created_at    TEXT NOT NULL
+            );
         """)
         await db.commit()
 
@@ -288,6 +306,36 @@ async def migrate_db():
         cohort_cols = {row[1] for row in await cur.fetchall()}
         if "recurring_paused" not in cohort_cols:
             await db.execute("ALTER TABLE cohorts ADD COLUMN recurring_paused INTEGER DEFAULT 0")
+
+        # PLANS: user_plans table
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='user_plans'"
+        )
+        if not await cur.fetchone():
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS user_plans (
+                    user_id     INTEGER PRIMARY KEY,
+                    plan        TEXT NOT NULL DEFAULT 'start',
+                    expires_at  TEXT,
+                    updated_at  TEXT NOT NULL
+                )
+            """)
+
+        # PLANS: promo_codes table
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='promo_codes'"
+        )
+        if not await cur.fetchone():
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS promo_codes (
+                    code          TEXT PRIMARY KEY,
+                    plan          TEXT NOT NULL,
+                    duration_days INTEGER,
+                    max_uses      INTEGER,
+                    used_count    INTEGER NOT NULL DEFAULT 0,
+                    created_at    TEXT NOT NULL
+                )
+            """)
 
         await db.commit()
 

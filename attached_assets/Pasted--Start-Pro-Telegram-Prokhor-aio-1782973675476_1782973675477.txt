@@ -1,0 +1,713 @@
+# Задача: создать систему тарифов Start/Pro с нуля
+
+## Контекст
+
+Это Telegram-бот Prokhor на aiogram 3.x + aiosqlite для психологов. В проекте уже есть: handlers/clients.py, handlers/sessions.py, handlers/analytics.py, handlers/checkins.py, handlers/cohorts.py, handlers/supervision.py, database.py, keyboards.py, translations.py.
+
+Нужно создать систему тарифов с нуля — два файла (`plan_limits.py` и `handlers/plans.py`) и новые таблицы в базе данных через `migrate_db()`.
+
+---
+
+## Шаг 1: создать файл `plan_limits.py` в корне проекта
+
+```python
+"""Tariff plans, limits, and helper functions for the Prokhor bot."""
+
+import logging
+from datetime import datetime
+
+import aiosqlite
+
+from database import DB_PATH, now_str
+
+log = logging.getLogger(__name__)
+
+PLANS: dict[str, dict] = {
+    "start": {
+        "name": "Start",
+        "max_individual_clients": 5,
+        "max_cohorts": 2,
+        "max_cohort_members": 15,
+        "checkins": True,
+        "analytics": "30days",   # аналитика только за последние 30 дней
+        "export": False,
+        "supervision": False,
+        "faq": False,
+        "ai_assistant": False,
+        "polls": False,
+    },
+    "pro": {
+        "name": "Pro",
+        "max_individual_clients": None,   # безлимит
+        "max_cohorts": 10,
+        "max_cohort_members": 50,
+        "checkins": True,
+        "analytics": True,               # полная аналитика за всё время
+        "export": True,
+        "supervision": True,
+        "faq": True,
+        "ai_assistant": True,
+        "polls": True,
+    },
+}
+
+_EXPIRED_MSG = (
+    "📦 Ваш тариф Pro истёк. Вы переведены на Start.\n"
+    "Для продления введите промокод: /promo"
+)
+
+
+async def get_user_plan(user_id: int, bot=None) -> dict:
+    """Return the plan limits dict for the user.
+    Handles expiry: if Pro has expired, downgrades to Start and notifies user.
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT plan, expires_at FROM user_plans WHERE user_id = ?",
+                (user_id,)
+            )
+            row = await cur.fetchone()
+
+        if not row:
+            return dict(PLANS["start"])
+
+        plan_name, expires_at = row
+
+        if expires_at:
+            try:
+                exp_dt = datetime.strptime(expires_at, "%Y-%m-%d %H:%M")
+            except ValueError:
+                exp_dt = datetime.strptime(expires_at, "%Y-%m-%d")
+
+            if exp_dt < datetime.now():
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute(
+                        "UPDATE user_plans SET plan = 'start', expires_at = NULL WHERE user_id = ?",
+                        (user_id,)
+                    )
+                    await db.commit()
+                if bot:
+                    try:
+                        await bot.send_message(user_id, _EXPIRED_MSG)
+                    except Exception as e:
+                        log.warning("Could not notify user %d of plan expiry: %s", user_id, e)
+                return dict(PLANS["start"])
+
+        return dict(PLANS.get(plan_name, PLANS["start"]))
+
+    except Exception as e:
+        log.error("get_user_plan error for user %d: %s", user_id, e)
+        return dict(PLANS["start"])
+
+
+async def get_analytics_days_limit(user_id: int) -> int | None:
+    """Return max days for analytics history.
+    Returns 30 for Start, None for Pro (unlimited), 0 if blocked.
+    """
+    plan = await get_user_plan(user_id)
+    analytics = plan.get("analytics")
+    if analytics == "30days":
+        return 30
+    elif analytics is True:
+        return None
+    return 0
+
+
+async def check_client_limit(user_id: int) -> bool:
+    """Return True if the user can add another individual client."""
+    plan = await get_user_plan(user_id)
+    max_c = plan["max_individual_clients"]
+    if max_c is None:
+        return True
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM clients WHERE psychologist_id = ? AND is_archived = 0",
+                (user_id,)
+            )
+            count = (await cur.fetchone())[0]
+        return count < max_c
+    except Exception as e:
+        log.error("check_client_limit error: %s", e)
+        return True
+
+
+async def check_cohort_limit(user_id: int) -> bool:
+    """Return True if user can create another cohort."""
+    plan = await get_user_plan(user_id)
+    max_c = plan["max_cohorts"]
+    if max_c is None:
+        return True
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM cohorts WHERE psychologist_id = ?", (user_id,)
+            )
+            count = (await cur.fetchone())[0]
+        return count < max_c
+    except Exception as e:
+        log.error("check_cohort_limit error: %s", e)
+        return True
+
+
+async def check_cohort_member_limit(cohort_id: int, user_id: int) -> bool:
+    """Return True if the cohort can accept another member."""
+    plan = await get_user_plan(user_id)
+    max_m = plan["max_cohort_members"]
+    if max_m is None:
+        return True
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM cohort_members WHERE cohort_id = ?", (cohort_id,)
+            )
+            count = (await cur.fetchone())[0]
+        return count < max_m
+    except Exception as e:
+        log.error("check_cohort_member_limit error: %s", e)
+        return True
+
+
+async def check_plan_limit(
+    user_id: int,
+    action: str,
+    cohort_id: int | None = None,
+) -> tuple[bool, str]:
+    """Unified gate check before any plan-limited action.
+    action: 'add_client' | 'add_cohort' | 'add_cohort_member' | 'use_pro_feature'
+    Returns (allowed, error_message).
+    """
+    plan = await get_user_plan(user_id)
+
+    try:
+        if action == "add_client":
+            max_c = plan["max_individual_clients"]
+            if max_c is not None:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    cur = await db.execute(
+                        "SELECT COUNT(*) FROM clients WHERE psychologist_id = ? AND is_archived = 0",
+                        (user_id,),
+                    )
+                    count = (await cur.fetchone())[0]
+                if count >= max_c:
+                    return False, (
+                        "⚠️ На тарифе Start можно добавить максимум 5 клиентов.\n"
+                        "Введите промокод: /promo"
+                    )
+
+        elif action == "add_cohort":
+            max_c = plan["max_cohorts"]
+            if max_c is not None:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    cur = await db.execute(
+                        "SELECT COUNT(*) FROM cohorts WHERE psychologist_id = ?",
+                        (user_id,),
+                    )
+                    count = (await cur.fetchone())[0]
+                if count >= max_c:
+                    return False, (
+                        "⚠️ На тарифе Start доступно 2 когорты.\n"
+                        "Введите промокод: /promo"
+                    )
+
+        elif action == "add_cohort_member":
+            if cohort_id is not None:
+                max_m = plan["max_cohort_members"]
+                if max_m is not None:
+                    async with aiosqlite.connect(DB_PATH) as db:
+                        cur = await db.execute(
+                            "SELECT COUNT(*) FROM cohort_members WHERE cohort_id = ?",
+                            (cohort_id,),
+                        )
+                        count = (await cur.fetchone())[0]
+                    if count >= max_m:
+                        return False, (
+                            "⚠️ На тарифе Start когорта вмещает до 15 участников.\n"
+                            "Введите промокод: /promo"
+                        )
+
+        elif action == "use_pro_feature":
+            if not plan.get("export") and not plan.get("supervision"):
+                return False, feature_blocked_msg()
+
+    except Exception as e:
+        log.error("check_plan_limit error user=%d action=%s: %s", user_id, action, e)
+
+    return True, ""
+
+
+def feature_blocked_msg() -> str:
+    return "⚠️ Эта функция доступна на тарифе Pro.\nВведите промокод: /promo"
+
+
+def client_limit_msg() -> str:
+    return (
+        "⚠️ На тарифе Start можно добавить максимум 5 клиентов.\n"
+        "Введите промокод для расширения: /promo"
+    )
+
+
+def cohort_limit_msg() -> str:
+    return (
+        "⚠️ На тарифе Start доступно 2 когорты.\n"
+        "Введите промокод для расширения: /promo"
+    )
+
+
+def cohort_member_limit_msg() -> str:
+    return (
+        "⚠️ На тарифе Start когорта вмещает до 15 участников.\n"
+        "Введите промокод для расширения: /promo"
+    )
+```
+
+---
+
+## Шаг 2: создать файл `handlers/plans.py`
+
+```python
+"""Tariff plans and promo codes handler."""
+
+import logging
+from datetime import datetime, timedelta
+
+import aiosqlite
+from aiogram import F, Router
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, Message
+
+from database import DB_PATH, now_str
+from keyboards import main_menu_keyboard
+from plan_limits import PLANS, get_user_plan
+from translations import t
+
+log = logging.getLogger(__name__)
+router = Router()
+
+
+class PromoForm(StatesGroup):
+    waiting_code = State()
+
+
+# ── /promo — ввод промокода ────────────────────────────────────────────────
+
+@router.message(Command("promo"))
+async def promo_cmd(message: Message, state: FSMContext):
+    lang = await _get_lang(message.from_user.id)
+    await state.set_state(PromoForm.waiting_code)
+    await message.answer(
+        "🎟 Введите промокод:" if lang == "ru" else "🎟 Enter promo code:"
+    )
+
+
+@router.message(PromoForm.waiting_code)
+async def promo_got_code(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    lang = await _get_lang(user_id)
+    code = message.text.strip()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT plan, duration_days, max_uses, used_count FROM promo_codes WHERE code = ?",
+            (code,)
+        )
+        row = await cur.fetchone()
+
+    if not row:
+        await message.answer(
+            "❌ Промокод не найден." if lang == "ru" else "❌ Promo code not found."
+        )
+        return
+
+    plan_name, duration_days, max_uses, used_count = row
+
+    if max_uses is not None and used_count >= max_uses:
+        await message.answer(
+            "❌ Этот промокод уже использован максимальное число раз."
+            if lang == "ru" else
+            "❌ This promo code has reached its usage limit."
+        )
+        return
+
+    # Вычисляем дату истечения
+    expires_at = None
+    if duration_days:
+        expires_at = (datetime.now() + timedelta(days=duration_days)).strftime("%Y-%m-%d %H:%M")
+
+    # Применяем план пользователю
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO user_plans (user_id, plan, expires_at, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 plan = excluded.plan,
+                 expires_at = excluded.expires_at,
+                 updated_at = excluded.updated_at""",
+            (user_id, plan_name, expires_at, now_str())
+        )
+        await db.execute(
+            "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = ?",
+            (code,)
+        )
+        await db.commit()
+
+    plan_display = PLANS.get(plan_name, {}).get("name", plan_name)
+    if expires_at:
+        msg = (
+            f"✅ Тариф *{plan_display}* активирован до {expires_at}!"
+            if lang == "ru" else
+            f"✅ Plan *{plan_display}* activated until {expires_at}!"
+        )
+    else:
+        msg = (
+            f"✅ Тариф *{plan_display}* активирован бессрочно!"
+            if lang == "ru" else
+            f"✅ Plan *{plan_display}* activated permanently!"
+        )
+
+    await message.answer(msg, parse_mode="Markdown", reply_markup=main_menu_keyboard(lang))
+    log.info("User %d activated plan %s via promo %s", user_id, plan_name, code)
+
+
+# ── /myplan — просмотр текущего тарифа ────────────────────────────────────
+
+@router.message(Command("myplan"))
+async def myplan_cmd(message: Message):
+    user_id = message.from_user.id
+    lang = await _get_lang(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT plan, expires_at FROM user_plans WHERE user_id = ?",
+            (user_id,)
+        )
+        row = await cur.fetchone()
+
+    if not row:
+        plan_name, expires_at = "start", None
+    else:
+        plan_name, expires_at = row
+
+    plan_display = PLANS.get(plan_name, {}).get("name", plan_name)
+
+    if expires_at:
+        info = (
+            f"📦 Ваш тариф: *{plan_display}*\nДействует до: {expires_at}"
+            if lang == "ru" else
+            f"📦 Your plan: *{plan_display}*\nValid until: {expires_at}"
+        )
+    else:
+        info = (
+            f"📦 Ваш тариф: *{plan_display}*"
+            if lang == "ru" else
+            f"📦 Your plan: *{plan_display}*"
+        )
+
+    await message.answer(info, parse_mode="Markdown")
+
+
+# ── Админ-команды ──────────────────────────────────────────────────────────
+
+@router.message(Command("giveplan"))
+async def admin_giveplan(message: Message):
+    """Admin: /giveplan <user_id> <plan> <days>
+    Example: /giveplan 123456789 pro 30
+    """
+    import os
+    admin_id = int(os.environ.get("ADMIN_ID", 0))
+    if message.from_user.id != admin_id:
+        return
+
+    parts = message.text.split()
+    if len(parts) < 3:
+        await message.answer("Usage: /giveplan <user_id> <plan> [days]")
+        return
+
+    target_id = int(parts[1])
+    plan_name = parts[2].lower()
+    days = int(parts[3]) if len(parts) > 3 else None
+
+    expires_at = None
+    if days:
+        expires_at = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO user_plans (user_id, plan, expires_at, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 plan = excluded.plan,
+                 expires_at = excluded.expires_at,
+                 updated_at = excluded.updated_at""",
+            (target_id, plan_name, expires_at, now_str())
+        )
+        await db.commit()
+
+    await message.answer(f"✅ User {target_id} → plan '{plan_name}', expires: {expires_at or 'never'}")
+
+
+@router.message(Command("addpromo"))
+async def admin_addpromo(message: Message):
+    """Admin: /addpromo <code> <plan> <days> [max_uses]
+    Example: /addpromo BETA2026 pro 30 100
+    """
+    import os
+    admin_id = int(os.environ.get("ADMIN_ID", 0))
+    if message.from_user.id != admin_id:
+        return
+
+    parts = message.text.split()
+    if len(parts) < 4:
+        await message.answer("Usage: /addpromo <code> <plan> <days> [max_uses]")
+        return
+
+    code = parts[1]
+    plan_name = parts[2].lower()
+    days = int(parts[3])
+    max_uses = int(parts[4]) if len(parts) > 4 else None
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO promo_codes (code, plan, duration_days, max_uses, used_count, created_at)
+               VALUES (?, ?, ?, ?, 0, ?)""",
+            (code, plan_name, days, max_uses, now_str())
+        )
+        await db.commit()
+
+    await message.answer(f"✅ Promo '{code}' → plan '{plan_name}', {days} days, max uses: {max_uses or '∞'}")
+
+
+@router.message(Command("listpromos"))
+async def admin_listpromos(message: Message):
+    """Admin: список всех промокодов."""
+    import os
+    admin_id = int(os.environ.get("ADMIN_ID", 0))
+    if message.from_user.id != admin_id:
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT code, plan, duration_days, max_uses, used_count FROM promo_codes ORDER BY created_at DESC"
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        await message.answer("Промокодов нет.")
+        return
+
+    lines = []
+    for code, plan, days, max_uses, used in rows:
+        limit = f"{used}/{max_uses}" if max_uses else f"{used}/∞"
+        lines.append(f"• `{code}` → {plan}, {days}д, использований: {limit}")
+
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+
+async def _get_lang(user_id: int) -> str:
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT lang FROM users WHERE telegram_id = ?", (user_id,)
+            )
+            row = await cur.fetchone()
+        return row[0] if row else "ru"
+    except Exception:
+        return "ru"
+```
+
+---
+
+## Шаг 3: добавить таблицы в database.py
+
+### 3.1 В функцию `init_db()` добавь создание таблиц (внутри существующего `CREATE TABLE IF NOT EXISTS` блока):
+
+```sql
+-- PLANS: user tariff plans
+CREATE TABLE IF NOT EXISTS user_plans (
+    user_id     INTEGER PRIMARY KEY,
+    plan        TEXT NOT NULL DEFAULT 'start',
+    expires_at  TEXT,
+    updated_at  TEXT NOT NULL
+);
+
+-- PLANS: promo codes
+CREATE TABLE IF NOT EXISTS promo_codes (
+    code          TEXT PRIMARY KEY,
+    plan          TEXT NOT NULL,
+    duration_days INTEGER,
+    max_uses      INTEGER,
+    used_count    INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL
+);
+```
+
+### 3.2 В функцию `migrate_db()` добавь в конец (перед `await db.commit()`):
+
+```python
+# user_plans table
+cur = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_plans'")
+if not await cur.fetchone():
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS user_plans (
+            user_id     INTEGER PRIMARY KEY,
+            plan        TEXT NOT NULL DEFAULT 'start',
+            expires_at  TEXT,
+            updated_at  TEXT NOT NULL
+        )
+    """)
+
+# promo_codes table
+cur = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='promo_codes'")
+if not await cur.fetchone():
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS promo_codes (
+            code          TEXT PRIMARY KEY,
+            plan          TEXT NOT NULL,
+            duration_days INTEGER,
+            max_uses      INTEGER,
+            used_count    INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL
+        )
+    """)
+```
+
+---
+
+## Шаг 4: подключить router в `handlers/__init__.py`
+
+```python
+from . import legal, menu, clients, sessions, homework, notes, analytics, checkins, settings, timezone, cohorts, supervision, client_sessions, plans
+
+routers = [
+    legal.router,
+    menu.router,
+    client_sessions.router,
+    clients.router,
+    sessions.router,
+    homework.router,
+    notes.router,
+    analytics.router,
+    checkins.router,
+    settings.router,
+    timezone.router,
+    cohorts.router,
+    supervision.router,
+    plans.router,   # новый
+]
+```
+
+---
+
+## Шаг 5: добавить проверки лимитов в существующие handlers
+
+### handlers/clients.py
+В начало файла добавь импорт:
+```python
+from plan_limits import check_client_limit, check_plan_limit, client_limit_msg, feature_blocked_msg, get_user_plan, get_analytics_days_limit
+```
+
+Найди место где добавляется клиент (callback `c_add`) и перед сохранением в БД добавь проверку:
+```python
+allowed, err_msg = await check_plan_limit(callback.from_user.id, "add_client")
+if not allowed:
+    await callback.message.answer(err_msg)
+    return
+```
+
+Найди место где показывается аналитика/timeline клиента и добавь:
+```python
+days_limit = await get_analytics_days_limit(psych_id)
+# если days_limit == 30 — фильтруй SQL-запросы по дате: WHERE timestamp >= date('now', '-30 days')
+```
+
+Найди место где делается экспорт клиента и добавь:
+```python
+plan = await get_user_plan(psych_id)
+if not plan.get("export"):
+    await callback.message.answer(feature_blocked_msg())
+    return
+```
+
+### handlers/cohorts.py
+В начало файла добавь:
+```python
+from plan_limits import check_plan_limit, cohort_limit_msg, cohort_member_limit_msg, get_user_plan, feature_blocked_msg
+```
+
+Найди место где создаётся когорта и добавь проверку:
+```python
+allowed, err_msg = await check_plan_limit(message.from_user.id, "add_cohort")
+if not allowed:
+    await message.answer(err_msg)
+    return
+```
+
+Найди место где добавляется участник когорты и добавь:
+```python
+allowed, err_msg = await check_plan_limit(psych_id, "add_cohort_member", cohort_id=cohort_id)
+if not allowed:
+    await message.answer(err_msg)
+    return
+```
+
+### handlers/supervision.py
+В начало файла добавь:
+```python
+from plan_limits import get_user_plan, feature_blocked_msg
+```
+
+В начало каждой из трёх команд (`/supervision_case`, `/supervision_logbook`, `/supervision_progress`) добавь:
+```python
+plan = await get_user_plan(message.from_user.id)
+if not plan.get("supervision"):
+    await message.answer(
+        "⚠️ Супервизия доступна только на тарифе Pro.\nВведите промокод: /promo"
+    )
+    return
+```
+
+---
+
+## Шаг 6: добавить кнопку "Мой тариф" в меню настроек
+
+В `keyboards.py` найди функцию `settings_keyboard(lang)` и добавь кнопку:
+```python
+InlineKeyboardButton(
+    text="📦 Мой тариф" if lang == "ru" else "📦 My plan",
+    callback_data="st_myplan"
+)
+```
+
+В `handlers/settings.py` добавь обработчик:
+```python
+@router.callback_query(F.data == "st_myplan")
+async def settings_myplan(callback: CallbackQuery):
+    from handlers.plans import myplan_cmd
+    await callback.answer()
+    await myplan_cmd(callback.message)
+```
+
+---
+
+## Что НЕ трогать
+
+- Всю существующую логику handlers (clients, sessions, cohorts и т.д.) кроме добавления проверок лимитов.
+- Существующие таблицы в database.py — только добавляем новые через migrate_db().
+- Файл `.env` — ADMIN_ID уже должен быть там.
+
+---
+
+## Итоговая проверка
+
+После реализации убедись что:
+1. `/promo TESTCODE` — активирует тариф если промокод существует.
+2. `/myplan` — показывает текущий тариф пользователя.
+3. `/addpromo TEST pro 30 10` (от админа) — создаёт промокод.
+4. `/giveplan 123456 pro 30` (от админа) — выдаёт Pro напрямую.
+5. Психолог на Start не может добавить 6-го клиента — получает сообщение с /promo.
+6. Психолог на Start не может открыть супервизию — получает блокировку.
+7. Психолог на Pro имеет доступ ко всему без ограничений.

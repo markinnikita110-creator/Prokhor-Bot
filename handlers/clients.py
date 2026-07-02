@@ -106,7 +106,13 @@ async def invite_pick(callback: CallbackQuery):
 # ── c_add → start AddClientForm ────────────────────────────────────────────
 @router.callback_query(F.data == "c_add")
 async def c_add_start(callback: CallbackQuery, state: FSMContext):
+    from plan_limits import check_plan_limit
     lang = await get_user_lang(callback.from_user.id)
+    allowed, err_msg = await check_plan_limit(callback.from_user.id, "add_client", lang=lang)
+    if not allowed:
+        await callback.answer()
+        await callback.message.answer(err_msg)
+        return
     await callback.answer()
     await state.update_data(lang=lang)
     await state.set_state(AddClientForm.name)

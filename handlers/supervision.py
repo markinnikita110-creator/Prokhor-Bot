@@ -27,7 +27,15 @@ log = logging.getLogger(__name__)
 @router.message(Command("supervision_case"))
 async def sup_case_start(message: Message, state: FSMContext):
     """COHORT_V2: Step 1 — ask for client alias."""
+    from plan_limits import get_user_plan
     lang = await get_user_lang(message.from_user.id)
+    plan = await get_user_plan(message.from_user.id)
+    if not plan.get("supervision"):
+        msg = ("⚠️ Супервизия доступна только на тарифе Pro.\nВведите промокод: /promo"
+               if lang == "ru" else
+               "⚠️ Supervision is available on the Pro plan only.\nEnter a promo code: /promo")
+        await message.answer(msg)
+        return
     await state.set_state(SupervisionCaseForm.client_alias)
     await message.answer(t(lang, "sup_case_alias"), reply_markup=cancel_keyboard(lang))
     log.info("COHORT_V2: supervision case started by user_id=%d", message.from_user.id)
@@ -105,8 +113,16 @@ async def sup_got_outcome(message: Message, state: FSMContext):
 @router.message(Command("supervision_logbook"))
 async def sup_logbook(message: Message):
     """COHORT_V2: Show all supervision cases for this psychologist."""
+    from plan_limits import get_user_plan
     uid = message.from_user.id
     lang = await get_user_lang(uid)
+    plan = await get_user_plan(uid)
+    if not plan.get("supervision"):
+        msg = ("⚠️ Супервизия доступна только на тарифе Pro.\nВведите промокод: /promo"
+               if lang == "ru" else
+               "⚠️ Supervision is available on the Pro plan only.\nEnter a promo code: /promo")
+        await message.answer(msg)
+        return
 
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -135,8 +151,16 @@ async def sup_logbook(message: Message):
 @router.message(Command("supervision_progress"))
 async def sup_progress(message: Message):
     """COHORT_V2: Show open supervision cases with full detail + close button."""
+    from plan_limits import get_user_plan
     uid = message.from_user.id
     lang = await get_user_lang(uid)
+    plan = await get_user_plan(uid)
+    if not plan.get("supervision"):
+        msg = ("⚠️ Супервизия доступна только на тарифе Pro.\nВведите промокод: /promo"
+               if lang == "ru" else
+               "⚠️ Supervision is available on the Pro plan only.\nEnter a promo code: /promo")
+        await message.answer(msg)
+        return
 
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
