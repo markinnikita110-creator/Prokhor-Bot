@@ -7,7 +7,7 @@ from . import (  # noqa: F401
 routers = [
     legal.router,           # LEGAL: consent callbacks first
     menu.router,
-    plans.router,           # PLANS: /promo, /myplan, st_myplan before settings
+    plans.router,           # PLANS: /promo, /myplan, st_tariff and sub-screens
     client_sessions.router, # INDIVIDUAL_SESSION: ics_/isd_/etc. before clients
     clients.router,
     sessions.router,

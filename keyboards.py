@@ -336,14 +336,40 @@ def checkin_score_keyboard(client_id: int) -> InlineKeyboardMarkup:
 # ── Settings section ───────────────────────────────────────────────────────
 
 def settings_keyboard(lang: str) -> InlineKeyboardMarkup:
-    plan_label = "📦 Мой тариф" if lang == "ru" else "📦 My plan"
+    tariff_label = "💰 Тариф" if lang == "ru" else "💰 My Plan"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "btn_language"), callback_data="st_lang")],
         [InlineKeyboardButton(text=t(lang, "btn_timezone"), callback_data="st_tz")],
-        [InlineKeyboardButton(text=plan_label,              callback_data="st_myplan")],
+        [InlineKeyboardButton(text=tariff_label,            callback_data="st_tariff")],
         [InlineKeyboardButton(text=t(lang, "btn_about"),    callback_data="st_about")],
         [InlineKeyboardButton(text=t(lang, "btn_main_menu"),callback_data="m_home")],
     ])
+
+
+def tariff_keyboard(lang: str, is_pro: bool = False) -> InlineKeyboardMarkup:
+    buttons = []
+    if not is_pro:
+        buttons.append([InlineKeyboardButton(
+            text=t(lang, "btn_tariff_upgrade"),
+            callback_data="st_tariff_upgrade",
+        )])
+    buttons.append([InlineKeyboardButton(
+        text=t(lang, "btn_tariff_compare"),
+        callback_data="st_tariff_compare",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=t(lang, "btn_tariff_history"),
+        callback_data="st_tariff_history",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=t(lang, "btn_tariff_howto"),
+        callback_data="st_tariff_howto",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=t(lang, "btn_tariff_back"),
+        callback_data="m_settings",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # ── Role selection (dual-role users) ──────────────────────────────────────

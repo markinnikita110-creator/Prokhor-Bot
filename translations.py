@@ -519,6 +519,67 @@ TEXTS = {
         "sup_close_btn":        "✅ Close case",
         "sup_case_closed":      "✅ Case #{id} marked as closed.",
         "sup_case_not_found":   "Case not found.",
+
+        # ── Tariff screen ──────────────────────────────────────────────────
+        "tariff_screen_start": (
+            "📦 Your plan: *Start* (free)\n\n"
+            "What's included:\n"
+            "• Up to 5 individual clients\n"
+            "• Up to 2 groups/cohorts\n"
+            "• Up to 15 members per cohort\n"
+            "• Check-ins and reminders\n"
+            "• Analytics for the last 30 days\n"
+            "• ❌ Export\n"
+            "• ❌ Supervision logbook\n\n"
+            "✨ Upgrade to Pro and work without limits."
+        ),
+        "tariff_screen_pro": (
+            "💎 Your plan: *Pro*{expires}\n\n"
+            "Everything in Start, plus:\n"
+            "• Unlimited individual clients\n"
+            "• Up to 10 cohorts\n"
+            "• Up to 50 members per cohort\n"
+            "• Full analytics history\n"
+            "• ✅ Export of notes and sessions\n"
+            "• ✅ Supervision logbook\n\n"
+            "Thank you for supporting the project! 🙌"
+        ),
+        "tariff_compare": (
+            "📊 *Plan comparison*\n\n"
+            "┌─────────────────┬────────┬──────┐\n"
+            "│ Feature         │ Start  │  Pro │\n"
+            "├─────────────────┼────────┼──────┤\n"
+            "│ Clients         │  5     │  ∞   │\n"
+            "│ Cohorts         │  2     │  10  │\n"
+            "│ Members/cohort  │  15    │  50  │\n"
+            "│ Analytics       │ 30 d   │  ∞   │\n"
+            "│ Export          │  ❌    │  ✅  │\n"
+            "│ Supervision     │  ❌    │  ✅  │\n"
+            "│ Check-ins       │  ✅    │  ✅  │\n"
+            "└─────────────────┴────────┴──────┘\n\n"
+            "To activate Pro, enter a promo code: /promo"
+        ),
+        "tariff_howto": (
+            "❓ *How does it work?*\n\n"
+            "Prokhor has two plans:\n\n"
+            "🟢 *Start* — free, always. Great for getting started "
+            "and working with a small client base.\n\n"
+            "💎 *Pro* — activated via a promo code. Removes all limits "
+            "and unlocks export and the supervision logbook.\n\n"
+            "To get a promo code, contact your administrator "
+            "or check the bot's main channel.\n\n"
+            "To enter a promo code: /promo"
+        ),
+        "tariff_history_empty": (
+            "📜 No plan changes recorded yet.\n\n"
+            "Your current plan: *{plan}*"
+        ),
+        "tariff_already_pro": "💎 You're already on Pro — enjoy working without limits!",
+        "btn_tariff_upgrade":  "💎 Upgrade to PRO",
+        "btn_tariff_compare":  "📊 Compare plans",
+        "btn_tariff_history":  "📜 Payment history",
+        "btn_tariff_howto":    "❓ How does this work?",
+        "btn_tariff_back":     "⬅️ Back",
     },
 
     "ru": {
@@ -1041,6 +1102,67 @@ TEXTS = {
         "sup_close_btn":        "✅ Закрыть случай",
         "sup_case_closed":      "✅ Случай #{id} закрыт.",
         "sup_case_not_found":   "Случай не найден.",
+
+        # ── Экран тарифа ───────────────────────────────────────────────────
+        "tariff_screen_start": (
+            "📦 Ваш тариф: *Start* (бесплатно)\n\n"
+            "Что включено:\n"
+            "• До 5 индивидуальных клиентов\n"
+            "• До 2 групп/когорт\n"
+            "• До 15 участников в когорте\n"
+            "• Чек-ины и напоминания\n"
+            "• Аналитика за последние 30 дней\n"
+            "• ❌ Экспорт\n"
+            "• ❌ Журнал супервизии\n\n"
+            "✨ Перейдите на Pro и работайте без ограничений."
+        ),
+        "tariff_screen_pro": (
+            "💎 Ваш тариф: *Pro*{expires}\n\n"
+            "Всё из Start, плюс:\n"
+            "• Неограниченное количество клиентов\n"
+            "• До 10 когорт\n"
+            "• До 50 участников в когорте\n"
+            "• Полная история аналитики\n"
+            "• ✅ Экспорт заметок и сессий\n"
+            "• ✅ Журнал супервизии\n\n"
+            "Спасибо, что поддерживаете проект! 🙌"
+        ),
+        "tariff_compare": (
+            "📊 *Сравнение тарифов*\n\n"
+            "┌──────────────────┬────────┬──────┐\n"
+            "│ Функция          │ Start  │  Pro │\n"
+            "├──────────────────┼────────┼──────┤\n"
+            "│ Клиенты          │  5     │  ∞   │\n"
+            "│ Когорты          │  2     │  10  │\n"
+            "│ Участников/когор.│  15    │  50  │\n"
+            "│ Аналитика        │ 30 дн  │  ∞   │\n"
+            "│ Экспорт          │  ❌    │  ✅  │\n"
+            "│ Супервизия       │  ❌    │  ✅  │\n"
+            "│ Чек-ины          │  ✅    │  ✅  │\n"
+            "└──────────────────┴────────┴──────┘\n\n"
+            "Для активации Pro введите промокод: /promo"
+        ),
+        "tariff_howto": (
+            "❓ *Как это работает?*\n\n"
+            "У Прохора два тарифа:\n\n"
+            "🟢 *Start* — бесплатный, навсегда. Отлично подходит для старта "
+            "и работы с небольшой базой клиентов.\n\n"
+            "💎 *Pro* — активируется по промокоду. Снимает все ограничения, "
+            "открывает экспорт и журнал супервизии.\n\n"
+            "Чтобы получить промокод, обратитесь к администратору "
+            "или загляните в основной канал бота.\n\n"
+            "Ввести промокод: /promo"
+        ),
+        "tariff_history_empty": (
+            "📜 Изменений тарифа пока нет.\n\n"
+            "Ваш текущий тариф: *{plan}*"
+        ),
+        "tariff_already_pro": "💎 Вы уже на тарифе Pro — работайте без ограничений!",
+        "btn_tariff_upgrade":  "💎 Перейти на PRO",
+        "btn_tariff_compare":  "📊 Сравнить тарифы",
+        "btn_tariff_history":  "📜 История платежей",
+        "btn_tariff_howto":    "❓ Как это работает?",
+        "btn_tariff_back":     "⬅️ Назад",
     },
 }
 

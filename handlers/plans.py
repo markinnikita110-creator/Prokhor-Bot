@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from database import DB_PATH, get_user_lang, now_str
-from keyboards import main_menu_keyboard, settings_keyboard
+from keyboards import main_menu_keyboard, settings_keyboard, tariff_keyboard
 from plan_limits import PLANS, get_user_plan
 from translations import t
 
@@ -22,6 +22,39 @@ router = Router()
 
 class PromoForm(StatesGroup):
     waiting_code = State()
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+async def _load_plan_row(user_id: int) -> tuple[str, str | None]:
+    """Return (plan_name, expires_at) for user, defaults to ('start', None)."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT plan, expires_at FROM user_plans WHERE user_id = ?", (user_id,)
+            )
+            row = await cur.fetchone()
+        return (row[0], row[1]) if row else ("start", None)
+    except Exception as e:
+        log.error("_load_plan_row error: %s", e)
+        return ("start", None)
+
+
+async def _build_tariff_text(user_id: int, lang: str) -> tuple[str, bool]:
+    """Return (text, is_pro) for the main tariff screen."""
+    plan_name, expires_at = await _load_plan_row(user_id)
+    is_pro = plan_name == "pro"
+
+    if is_pro:
+        if expires_at:
+            expires_str = f"\n до {expires_at}" if lang == "ru" else f"\n until {expires_at}"
+        else:
+            expires_str = ""
+        text = t(lang, "tariff_screen_pro", expires=expires_str)
+    else:
+        text = t(lang, "tariff_screen_start")
+
+    return text, is_pro
 
 
 # ── /promo — enter promo code ──────────────────────────────────────────────
@@ -102,63 +135,134 @@ async def promo_got_code(message: Message, state: FSMContext):
     log.info("User %d activated plan %s via promo %s", user_id, plan_name, code)
 
 
-# ── /myplan — view current plan ────────────────────────────────────────────
+# ── /myplan — view current plan (legacy command) ───────────────────────────
 
 @router.message(Command("myplan"))
 async def myplan_cmd(message: Message):
-    await _send_myplan(message.from_user.id, message)
+    lang = await get_user_lang(message.from_user.id)
+    text, is_pro = await _build_tariff_text(message.from_user.id, lang)
+    await message.answer(text, parse_mode="Markdown",
+                         reply_markup=tariff_keyboard(lang, is_pro=is_pro))
 
 
-async def _send_myplan(user_id: int, target):
-    """Send plan info to a Message or as a reply. target can be Message."""
-    lang = await get_user_lang(user_id)
+# ── st_tariff — main tariff screen (from settings menu) ───────────────────
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT plan, expires_at FROM user_plans WHERE user_id = ?", (user_id,)
-        )
-        row = await cur.fetchone()
-
-    plan_name = row[0] if row else "start"
-    expires_at = row[1] if row else None
-    plan_display = PLANS.get(plan_name, {}).get("name", plan_name)
-    plan_data = PLANS.get(plan_name, PLANS["start"])
-
-    limits_ru = (
-        f"• Клиентов: {plan_data['max_individual_clients'] or '∞'}\n"
-        f"• Когорт: {plan_data['max_cohorts'] or '∞'}\n"
-        f"• Участников в когорте: {plan_data['max_cohort_members'] or '∞'}\n"
-        f"• Экспорт: {'✅' if plan_data['export'] else '❌'}\n"
-        f"• Супервизия: {'✅' if plan_data['supervision'] else '❌'}"
-    )
-    limits_en = (
-        f"• Clients: {plan_data['max_individual_clients'] or '∞'}\n"
-        f"• Cohorts: {plan_data['max_cohorts'] or '∞'}\n"
-        f"• Members per cohort: {plan_data['max_cohort_members'] or '∞'}\n"
-        f"• Export: {'✅' if plan_data['export'] else '❌'}\n"
-        f"• Supervision: {'✅' if plan_data['supervision'] else '❌'}"
-    )
-
-    if lang == "ru":
-        header = f"📦 Ваш тариф: *{plan_display}*"
-        if expires_at:
-            header += f"\nДействует до: {expires_at}"
-        text = f"{header}\n\n{limits_ru}"
-    else:
-        header = f"📦 Your plan: *{plan_display}*"
-        if expires_at:
-            header += f"\nValid until: {expires_at}"
-        text = f"{header}\n\n{limits_en}"
-
-    await target.answer(text, parse_mode="Markdown")
-
-
-# ── st_myplan callback (from settings menu) ────────────────────────────────
-
-@router.callback_query(F.data == "st_myplan")
-async def settings_myplan(callback: CallbackQuery):
+@router.callback_query(F.data == "st_tariff")
+async def tariff_screen(callback: CallbackQuery):
     await callback.answer()
-    await _send_myplan(callback.from_user.id, callback.message)
+    lang = await get_user_lang(callback.from_user.id)
+    text, is_pro = await _build_tariff_text(callback.from_user.id, lang)
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=tariff_keyboard(lang, is_pro=is_pro),
+        )
+    except Exception:
+        await callback.message.answer(
+            text, parse_mode="Markdown",
+            reply_markup=tariff_keyboard(lang, is_pro=is_pro),
+        )
+
+
+# ── st_tariff_upgrade — "Перейти на PRO" ──────────────────────────────────
+
+@router.callback_query(F.data == "st_tariff_upgrade")
+async def tariff_upgrade(callback: CallbackQuery):
+    await callback.answer()
+    lang = await get_user_lang(callback.from_user.id)
+    plan_name, _ = await _load_plan_row(callback.from_user.id)
+
+    if plan_name == "pro":
+        msg = t(lang, "tariff_already_pro")
+    else:
+        if lang == "ru":
+            msg = (
+                "💎 *Хотите перейти на Pro?*\n\n"
+                "Введите промокод командой /promo — и тариф активируется мгновенно.\n\n"
+                "Промокод можно получить у администратора или в основном канале бота."
+            )
+        else:
+            msg = (
+                "💎 *Ready to upgrade to Pro?*\n\n"
+                "Enter a promo code via /promo — your plan activates instantly.\n\n"
+                "Get a promo code from the administrator or the bot's main channel."
+            )
+
+    try:
+        await callback.message.edit_text(
+            msg, parse_mode="Markdown",
+            reply_markup=tariff_keyboard(lang, is_pro=(plan_name == "pro")),
+        )
+    except Exception:
+        await callback.message.answer(msg, parse_mode="Markdown",
+                                      reply_markup=tariff_keyboard(lang, is_pro=False))
+
+
+# ── st_tariff_compare — "Сравнить тарифы" ─────────────────────────────────
+
+@router.callback_query(F.data == "st_tariff_compare")
+async def tariff_compare(callback: CallbackQuery):
+    await callback.answer()
+    lang = await get_user_lang(callback.from_user.id)
+    plan_name, _ = await _load_plan_row(callback.from_user.id)
+    text = t(lang, "tariff_compare")
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=tariff_keyboard(lang, is_pro=(plan_name == "pro")),
+        )
+    except Exception:
+        await callback.message.answer(text, parse_mode="Markdown",
+                                      reply_markup=tariff_keyboard(lang, is_pro=(plan_name == "pro")))
+
+
+# ── st_tariff_history — "История платежей" ────────────────────────────────
+
+@router.callback_query(F.data == "st_tariff_history")
+async def tariff_history(callback: CallbackQuery):
+    await callback.answer()
+    lang = await get_user_lang(callback.from_user.id)
+    plan_name, expires_at = await _load_plan_row(callback.from_user.id)
+    plan_display = PLANS.get(plan_name, {}).get("name", plan_name)
+
+    lines = []
+    if expires_at:
+        if lang == "ru":
+            lines.append(f"📦 Текущий тариф: *{plan_display}*")
+            lines.append(f"📅 Действует до: {expires_at}")
+        else:
+            lines.append(f"📦 Current plan: *{plan_display}*")
+            lines.append(f"📅 Valid until: {expires_at}")
+    else:
+        lines.append(t(lang, "tariff_history_empty", plan=plan_display))
+
+    text = "\n".join(lines)
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=tariff_keyboard(lang, is_pro=(plan_name == "pro")),
+        )
+    except Exception:
+        await callback.message.answer(text, parse_mode="Markdown",
+                                      reply_markup=tariff_keyboard(lang, is_pro=(plan_name == "pro")))
+
+
+# ── st_tariff_howto — "Как это работает?" ─────────────────────────────────
+
+@router.callback_query(F.data == "st_tariff_howto")
+async def tariff_howto(callback: CallbackQuery):
+    await callback.answer()
+    lang = await get_user_lang(callback.from_user.id)
+    plan_name, _ = await _load_plan_row(callback.from_user.id)
+    text = t(lang, "tariff_howto")
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=tariff_keyboard(lang, is_pro=(plan_name == "pro")),
+        )
+    except Exception:
+        await callback.message.answer(text, parse_mode="Markdown",
+                                      reply_markup=tariff_keyboard(lang, is_pro=(plan_name == "pro")))
 
 
 # ── Admin: /giveplan <user_id> <plan> [days] ──────────────────────────────
