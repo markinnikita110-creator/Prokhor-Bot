@@ -38,7 +38,7 @@ from keyboards import (
     MENU_IND_SCHEDULE, MENU_IND_REMINDERS,
     MENU_COH_CREATE, MENU_COH_LIST,
     MENU_SUM_CLIENTS, MENU_SUM_COHORTS, MENU_SUM_STATS,
-    MENU_SET_LANGUAGE, MENU_SET_TIMEZONE, MENU_SET_NOTIFS,
+    MENU_SET_LANGUAGE, MENU_SET_TIMEZONE, MENU_SET_NOTIFS, MENU_SET_TARIFF,
     # legacy (still used by inline back-buttons in section keyboards)
     MENU_ANALYTICS, MENU_CHECKINS, MENU_CLIENTS, MENU_HOMEWORK, MENU_SESSIONS, MENU_SETTINGS,
     # keyboard builders
@@ -606,6 +606,31 @@ async def menu_set_timezone(message: Message):
     lang = await get_user_lang(message.from_user.id)
     await message.answer(t(lang, "ask_timezone_settings"),
                          reply_markup=timezone_keyboard(lang))
+
+
+@router.message(F.text.in_(MENU_SET_TARIFF))
+async def menu_set_tariff(message: Message):
+    # MENU: open tariff screen with inline keyboard
+    import aiosqlite
+    from database import DB_PATH
+    from keyboards import tariff_keyboard
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT plan, expires_at FROM user_plans WHERE user_id = ?", (uid,)
+        )
+        row = await cur.fetchone()
+    plan_name = row[0] if row else "start"
+    expires_at = row[1] if row else None
+    is_pro = plan_name == "pro"
+    if is_pro:
+        expires_str = (f"\n до {expires_at}" if lang == "ru" else f"\n until {expires_at}") if expires_at else ""
+        text = t(lang, "tariff_screen_pro", expires=expires_str)
+    else:
+        text = t(lang, "tariff_screen_start")
+    await message.answer(text, parse_mode="Markdown",
+                         reply_markup=tariff_keyboard(lang, is_pro=is_pro))
 
 
 @router.message(F.text.in_(MENU_SET_NOTIFS))

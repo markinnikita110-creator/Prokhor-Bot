@@ -55,6 +55,7 @@ MENU_SUM_STATS   = _all("btn_sum_stats")
 MENU_SET_LANGUAGE = _all("btn_set_language")
 MENU_SET_TIMEZONE = _all("btn_set_timezone")
 MENU_SET_NOTIFS   = _all("btn_set_notifs")
+MENU_SET_TARIFF   = _all("btn_set_tariff")
 
 # Legacy button sets (still used by inline "Back" callbacks in other handlers)
 MENU_CLIENTS   = _all("btn_clients")
@@ -125,8 +126,9 @@ def settings_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=t(lang, "btn_set_language")),
              KeyboardButton(text=t(lang, "btn_set_timezone"))],
-            [KeyboardButton(text=t(lang, "btn_set_notifs")),
-             KeyboardButton(text=t(lang, "btn_menu_back"))],
+            [KeyboardButton(text=t(lang, "btn_set_tariff")),
+             KeyboardButton(text=t(lang, "btn_set_notifs"))],
+            [KeyboardButton(text=t(lang, "btn_menu_back"))],
         ],
         resize_keyboard=True,
     )

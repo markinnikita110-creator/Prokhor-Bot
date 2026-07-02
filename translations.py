@@ -377,6 +377,7 @@ TEXTS = {
         # Settings submenu
         "btn_set_language":      "🌍 Language",
         "btn_set_timezone":      "🕐 Timezone",
+        "btn_set_tariff":        "💰 My Plan",
         "btn_set_notifs":        "🔔 Notifications",
         # Section headers
         "section_individual":    "👤 Individual:",
@@ -969,6 +970,7 @@ TEXTS = {
         # Подменю «Настройки»
         "btn_set_language":      "🌍 Язык",
         "btn_set_timezone":      "🕐 Часовой пояс",
+        "btn_set_tariff":        "💰 Тариф",
         "btn_set_notifs":        "🔔 Уведомления",
         # Заголовки разделов
         "section_individual":    "👤 Индивидуальные:",
