@@ -1,5 +1,7 @@
 """Client management: list, card, all client-scoped actions."""
 
+import csv
+import io
 import logging
 from datetime import datetime
 
@@ -24,6 +26,7 @@ from keyboards import (
     client_card_keyboard,
     client_list_keyboard,
     clients_section_keyboard,
+    export_format_keyboard,
 )
 from states import AddClientForm, AssignHomeworkFromCardForm, TagForm
 from states.note_states import AddNoteForm, SOAPForm
@@ -254,11 +257,56 @@ async def client_action_cb(callback: CallbackQuery, state: FSMContext, bot: Bot)
         text = await _build_engagement(client_id, client_name, lang)
         await callback.message.answer(text)
 
-    # ── Export ─────────────────────────────────────────────────────────────
+    # ── Export: format selection ────────────────────────────────────────────
     elif action == "exp":
-        content, filename = await _build_export(client_id, psych_id, client_name, lang)
+        from plan_limits import get_user_plan
+        plan = await get_user_plan(psych_id)
+        if not plan.get("export"):
+            msg = (
+                "⚠️ Экспорт доступен только на тарифе Pro.\nВведите промокод: /promo"
+                if lang == "ru" else
+                "⚠️ Export is available on the Pro plan only.\nEnter a promo code: /promo"
+            )
+            await callback.message.answer(msg)
+            return
+        await callback.message.answer(
+            t(lang, "export_select_format"),
+            reply_markup=export_format_keyboard(client_id, lang),
+        )
+
+    # ── Export: TXT ────────────────────────────────────────────────────────
+    elif action == "exp_txt":
+        from plan_limits import get_user_plan
+        plan = await get_user_plan(psych_id)
+        if not plan.get("export"):
+            await callback.message.answer(
+                "⚠️ Экспорт доступен только на тарифе Pro.\nВведите промокод: /promo"
+                if lang == "ru" else
+                "⚠️ Export is available on the Pro plan only.\nEnter a promo code: /promo"
+            )
+            return
+        content, filename = await _build_export_txt(client_id, psych_id, client_name, lang)
         await callback.message.answer_document(
-            BufferedInputFile(content, filename=filename))
+            BufferedInputFile(content, filename=filename),
+            caption=t(lang, "export_done", name=client_name),
+        )
+
+    # ── Export: CSV ────────────────────────────────────────────────────────
+    elif action == "exp_csv":
+        from plan_limits import get_user_plan
+        plan = await get_user_plan(psych_id)
+        if not plan.get("export"):
+            await callback.message.answer(
+                "⚠️ Экспорт доступен только на тарифе Pro.\nВведите промокод: /promo"
+                if lang == "ru" else
+                "⚠️ Export is available on the Pro plan only.\nEnter a promo code: /promo"
+            )
+            return
+        content, filename = await _build_export_csv(client_id, psych_id, client_name, lang)
+        await callback.message.answer_document(
+            BufferedInputFile(content, filename=filename),
+            caption=t(lang, "export_done", name=client_name),
+        )
 
     # ── Archive ────────────────────────────────────────────────────────────
     elif action == "arch":
@@ -389,41 +437,135 @@ async def _build_engagement(client_id: int, client_name: str, lang: str) -> str:
              checkins=len(scores), avg=avg_str, label=label) + flag_text
 
 
-async def _build_export(client_id: int, psych_id: int, client_name: str,
-                        lang: str) -> tuple[bytes, str]:
-    lines = [f"=== {client_name} ===", f"Exported: {now_str()}", ""]
+async def _fetch_client_data(client_id: int, psych_id: int, client_name: str) -> dict:
+    """Fetch all exportable data for a client into a dict of lists."""
+    data: dict = {"notes": [], "checkins": [], "homeworks": [], "sessions": []}
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT created_at, note_type, text FROM notes WHERE client_id = ? ORDER BY id",
             (client_id,))
-        notes = await cur.fetchall()
-        if notes:
-            lines += ["--- NOTES ---"] + [f"[{ts}] ({nt})\n{tx}" for ts, nt, tx in notes] + [""]
+        data["notes"] = await cur.fetchall()
 
         cur = await db.execute(
             "SELECT timestamp, score FROM checkins WHERE client_id = ? AND score > 0 ORDER BY id",
             (client_id,))
-        cis = await cur.fetchall()
-        if cis:
-            lines += ["--- CHECK-INS ---"] + [f"[{ts}] {sc}/10" for ts, sc in cis] + [""]
+        data["checkins"] = await cur.fetchall()
 
         cur = await db.execute(
             "SELECT created_at, text, completed FROM homeworks WHERE client_id = ? ORDER BY id",
             (client_id,))
-        hws = await cur.fetchall()
-        if hws:
-            lines += ["--- HOMEWORK ---"] + [
-                f"[{ts}] {'✅' if done else '🕓'} {tx}" for ts, tx, done in hws] + [""]
+        data["homeworks"] = await cur.fetchall()
 
         cur = await db.execute(
-            "SELECT scheduled_at FROM sessions WHERE psychologist_id = ? AND client_name = ? ORDER BY scheduled_at",
+            "SELECT scheduled_at, link FROM sessions "
+            "WHERE psychologist_id = ? AND client_name = ? ORDER BY scheduled_at",
             (psych_id, client_name))
-        sess = await cur.fetchall()
-        if sess:
-            lines += ["--- SESSIONS ---"] + [f"[{ts}]" for (ts,) in sess] + [""]
+        data["sessions"] = await cur.fetchall()
+
+        # Individual sessions (may or may not exist)
+        try:
+            cur = await db.execute(
+                "SELECT scheduled_at, duration_min FROM individual_sessions "
+                "WHERE psychologist_id = ? AND client_id = ? ORDER BY scheduled_at",
+                (psych_id, client_id))
+            indiv = await cur.fetchall()
+            data["sessions"] = list(data["sessions"]) + [(ts, f"{dur}min") for ts, dur in indiv]
+        except Exception:
+            pass
+
+    return data
+
+
+async def _build_export(client_id: int, psych_id: int, client_name: str,
+                        lang: str) -> tuple[bytes, str]:
+    """Legacy TXT export — delegates to _build_export_txt."""
+    return await _build_export_txt(client_id, psych_id, client_name, lang)
+
+
+async def _build_export_txt(client_id: int, psych_id: int, client_name: str,
+                            lang: str) -> tuple[bytes, str]:
+    """Build a human-readable TXT export for one client."""
+    data = await _fetch_client_data(client_id, psych_id, client_name)
+    exported_label = "Экспорт" if lang == "ru" else "Exported"
+    lines = [f"=== {client_name} ===", f"{exported_label}: {now_str()}", ""]
+
+    if data["notes"]:
+        header = "--- ЗАМЕТКИ ---" if lang == "ru" else "--- NOTES ---"
+        lines += [header]
+        for ts, nt, tx in data["notes"]:
+            lines.append(f"[{ts}] ({nt})\n{tx}")
+        lines.append("")
+
+    if data["checkins"]:
+        header = "--- ЧЕК-ИНЫ ---" if lang == "ru" else "--- CHECK-INS ---"
+        lines += [header]
+        for ts, sc in data["checkins"]:
+            lines.append(f"[{ts}] {sc}/10")
+        lines.append("")
+
+    if data["homeworks"]:
+        header = "--- ЗАДАНИЯ ---" if lang == "ru" else "--- HOMEWORK ---"
+        lines += [header]
+        for ts, tx, done in data["homeworks"]:
+            lines.append(f"[{ts}] {'✅' if done else '🕓'} {tx}")
+        lines.append("")
+
+    if data["sessions"]:
+        header = "--- СЕССИИ ---" if lang == "ru" else "--- SESSIONS ---"
+        lines += [header]
+        for row in data["sessions"]:
+            ts = row[0]
+            extra = row[1] if len(row) > 1 and row[1] else ""
+            lines.append(f"[{ts}]" + (f" {extra}" if extra else ""))
+        lines.append("")
 
     content = "\n".join(lines).encode("utf-8")
     filename = t(lang, "export_filename", client=client_name)
+    return content, filename
+
+
+async def _build_export_csv(client_id: int, psych_id: int, client_name: str,
+                            lang: str) -> tuple[bytes, str]:
+    """Build a CSV export for one client (importable in Excel/Sheets)."""
+    data = await _fetch_client_data(client_id, psych_id, client_name)
+
+    if lang == "ru":
+        col_section = "Раздел"
+        col_date    = "Дата"
+        col_content = "Содержание"
+        col_extra   = "Доп."
+        sec_note    = "Заметка"
+        sec_checkin = "Чек-ин"
+        sec_hw      = "Задание"
+        sec_session = "Сессия"
+    else:
+        col_section = "Section"
+        col_date    = "Date"
+        col_content = "Content"
+        col_extra   = "Extra"
+        sec_note    = "Note"
+        sec_checkin = "Check-in"
+        sec_hw      = "Homework"
+        sec_session = "Session"
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow([col_section, col_date, col_content, col_extra])
+
+    for ts, nt, tx in data["notes"]:
+        writer.writerow([sec_note, ts, tx, nt])
+    for ts, sc in data["checkins"]:
+        writer.writerow([sec_checkin, ts, f"{sc}/10", ""])
+    for ts, tx, done in data["homeworks"]:
+        status = "✅" if done else "🕓"
+        writer.writerow([sec_hw, ts, tx, status])
+    for row in data["sessions"]:
+        ts = row[0]
+        extra = row[1] if len(row) > 1 and row[1] else ""
+        writer.writerow([sec_session, ts, "", extra])
+
+    content = ("\ufeff" + buf.getvalue()).encode("utf-8")  # BOM for Excel
+    filename = t(lang, "export_csv_filename", client=client_name)
     return content, filename
 
 
@@ -606,18 +748,103 @@ async def archived_clients_cmd(message: Message):
 
 @router.message(Command("export"))
 async def export_cmd(message: Message):
-    lang = await get_user_lang(message.from_user.id)
+    from plan_limits import get_user_plan
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
+    plan = await get_user_plan(uid)
+    if not plan.get("export"):
+        msg = (
+            "⚠️ Экспорт доступен только на тарифе Pro.\nВведите промокод: /promo"
+            if lang == "ru" else
+            "⚠️ Export is available on the Pro plan only.\nEnter a promo code: /promo"
+        )
+        await message.answer(msg)
+        return
     args = message.text.split(maxsplit=1)
     if len(args) < 2 or not args[1].strip():
         await message.answer("Usage: /export <client>")
         return
     name = args[1].strip()
-    client_id = await resolve_client(message.from_user.id, name, create=False)
+    client_id = await resolve_client(uid, name, create=False)
     if not client_id:
         await message.answer(t(lang, "client_not_found", name=name))
         return
-    content, filename = await _build_export(client_id, message.from_user.id, name, lang)
-    await message.answer_document(BufferedInputFile(content, filename=filename))
+    content, filename = await _build_export_txt(client_id, uid, name, lang)
+    await message.answer_document(
+        BufferedInputFile(content, filename=filename),
+        caption=t(lang, "export_done", name=name),
+    )
+
+
+@router.message(Command("export_all"))
+async def export_all_cmd(message: Message):
+    """Export all active clients as a single TXT archive (Pro only)."""
+    from plan_limits import get_user_plan
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
+    plan = await get_user_plan(uid)
+    if not plan.get("export"):
+        msg = (
+            "⚠️ Экспорт доступен только на тарифе Pro.\nВведите промокод: /promo"
+            if lang == "ru" else
+            "⚠️ Export is available on the Pro plan only.\nEnter a promo code: /promo"
+        )
+        await message.answer(msg)
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT id, name FROM clients WHERE psychologist_id = ? AND is_archived = 0 ORDER BY name",
+            (uid,)
+        )
+        clients = await cur.fetchall()
+
+    if not clients:
+        await message.answer(t(lang, "export_all_no_clients"))
+        return
+
+    exported_label = "Экспорт всех клиентов" if lang == "ru" else "All clients export"
+    all_lines = [f"=== {exported_label} — {now_str()} ===", ""]
+
+    for cid, cname in clients:
+        data = await _fetch_client_data(cid, uid, cname)
+        all_lines.append(f"\n{'='*40}")
+        all_lines.append(f"  {cname}")
+        all_lines.append(f"{'='*40}")
+
+        if data["notes"]:
+            h = "ЗАМЕТКИ" if lang == "ru" else "NOTES"
+            all_lines.append(f"\n--- {h} ---")
+            for ts, nt, tx in data["notes"]:
+                all_lines.append(f"[{ts}] ({nt})\n{tx}")
+
+        if data["checkins"]:
+            h = "ЧЕК-ИНЫ" if lang == "ru" else "CHECK-INS"
+            all_lines.append(f"\n--- {h} ---")
+            for ts, sc in data["checkins"]:
+                all_lines.append(f"[{ts}] {sc}/10")
+
+        if data["homeworks"]:
+            h = "ЗАДАНИЯ" if lang == "ru" else "HOMEWORK"
+            all_lines.append(f"\n--- {h} ---")
+            for ts, tx, done in data["homeworks"]:
+                all_lines.append(f"[{ts}] {'✅' if done else '🕓'} {tx}")
+
+        if data["sessions"]:
+            h = "СЕССИИ" if lang == "ru" else "SESSIONS"
+            all_lines.append(f"\n--- {h} ---")
+            for row in data["sessions"]:
+                ts = row[0]
+                extra = row[1] if len(row) > 1 and row[1] else ""
+                all_lines.append(f"[{ts}]" + (f" {extra}" if extra else ""))
+
+    content = "\n".join(all_lines).encode("utf-8")
+    filename = t(lang, "export_all_filename")
+    count = len(clients)
+    await message.answer_document(
+        BufferedInputFile(content, filename=filename),
+        caption=t(lang, "export_all_done", count=count),
+    )
 
 
 @router.message(Command("tag"))

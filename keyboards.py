@@ -346,6 +346,25 @@ def settings_keyboard(lang: str) -> InlineKeyboardMarkup:
     ])
 
 
+def export_format_keyboard(client_id: int, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=t(lang, "btn_export_txt"),
+                callback_data=f"ca_{client_id}_exp_txt",
+            ),
+            InlineKeyboardButton(
+                text=t(lang, "btn_export_csv"),
+                callback_data=f"ca_{client_id}_exp_csv",
+            ),
+        ],
+        [InlineKeyboardButton(
+            text=t(lang, "btn_back_to_card"),
+            callback_data=f"cc_{client_id}",
+        )],
+    ])
+
+
 def tariff_keyboard(lang: str, is_pro: bool = False) -> InlineKeyboardMarkup:
     buttons = []
     if not is_pro:

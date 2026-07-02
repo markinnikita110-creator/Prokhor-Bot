@@ -129,7 +129,16 @@ TEXTS = {
         "no_clients_tag": "No clients found with tag '{tag}'.",
 
         # ── Export ────────────────────────────────────────────────────────
-        "export_filename": "export_{client}.txt",
+        "export_filename":       "export_{client}.txt",
+        "export_csv_filename":   "export_{client}.csv",
+        "export_all_filename":   "export_all_clients.txt",
+        "export_select_format":  "📤 Choose export format:",
+        "export_done":           "✅ Export ready: {name}",
+        "export_all_done":       "✅ All clients exported ({count}).",
+        "export_all_no_clients": "No active clients to export.",
+        "btn_export_txt":        "📄 TXT",
+        "btn_export_csv":        "📊 CSV (Excel)",
+        "btn_back_to_card":      "⬅️ Back to card",
 
         # ── Client-side ───────────────────────────────────────────────────
         "client_connected": "You are now connected to {specialist}.\n\nAvailable commands:\n/my_homeworks — your homework list\n/checkin_history — your last check-ins",
@@ -712,7 +721,16 @@ TEXTS = {
         "no_clients_tag": "Клиентов с тегом '{tag}' не найдено.",
 
         # ── Экспорт ───────────────────────────────────────────────────────
-        "export_filename": "экспорт_{client}.txt",
+        "export_filename":       "экспорт_{client}.txt",
+        "export_csv_filename":   "экспорт_{client}.csv",
+        "export_all_filename":   "экспорт_все_клиенты.txt",
+        "export_select_format":  "📤 Выберите формат экспорта:",
+        "export_done":           "✅ Экспорт готов: {name}",
+        "export_all_done":       "✅ Все клиенты экспортированы ({count}).",
+        "export_all_no_clients": "Нет активных клиентов для экспорта.",
+        "btn_export_txt":        "📄 TXT",
+        "btn_export_csv":        "📊 CSV (Excel)",
+        "btn_back_to_card":      "⬅️ Назад к карточке",
 
         # ── Клиентская сторона ────────────────────────────────────────────
         "client_connected": "Вы подключены к специалисту {specialist}.\n\nДоступные команды:\n/my_homeworks — ваши задания\n/checkin_history — история чек-инов",
