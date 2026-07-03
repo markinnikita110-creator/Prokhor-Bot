@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 CONSENT_VERSION = "1.0"
 
 # Commands and callbacks that never require consent check
-_EXEMPT_COMMANDS  = frozenset({"start", "privacy", "terms", "consent"})
+_EXEMPT_COMMANDS  = frozenset({"start", "privacy", "terms", "consent", "admin"})
 _EXEMPT_CALLBACKS = frozenset({"legal_accept", "legal_decline"})
 
 
