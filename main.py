@@ -25,6 +25,7 @@ from handlers.clients import set_bot_username
 from handlers.cohorts import generate_recurring_cohort_sessions  # RECURRING
 from handlers.legal import ConsentMiddleware
 from translations import t
+from backup_service import start_backup_scheduler
 
 BOT_START_TIME = datetime.utcnow()
 
@@ -446,6 +447,7 @@ async def main():
         dp.include_router(r)
 
     asyncio.create_task(reminder_loop())
+    start_backup_scheduler(bot)
     await dp.start_polling(bot)
 
 
