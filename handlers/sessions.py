@@ -7,7 +7,7 @@ import aiosqlite
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from database import (
     DB_PATH, format_offset, get_client_lang, get_client_timezone,
@@ -140,17 +140,24 @@ async def session_card_cb(callback: CallbackQuery):
     await callback.answer()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT client_name, scheduled_at FROM sessions WHERE id = ? AND psychologist_id = ?",
+            "SELECT client_name, scheduled_at, booking_status, proposed_start_datetime_utc "
+            "FROM sessions WHERE id = ? AND psychologist_id = ?",
             (session_id, callback.from_user.id)
         )
         row = await cur.fetchone()
     if not row:
         await callback.message.answer(t(lang, "session_not_found"))
         return
-    client_name, scheduled_at_utc = row
+    client_name, scheduled_at_utc, booking_status, proposed_utc = row
     _, psych_offset = await get_user_timezone(callback.from_user.id)
     scheduled_local = utc_to_local(scheduled_at_utc, psych_offset)
     text = t(lang, "session_row", id=session_id, client=client_name, date=scheduled_local)
+    # Show status badge for non-confirmed sessions
+    if booking_status == "pending_client" and proposed_utc:
+        proposed_local = utc_to_local(proposed_utc, psych_offset)
+        text = f"{text}\n\n{t(lang, 'session_pending_client_badge')}\n📅 → {proposed_local}"
+    elif booking_status == "pending_psych":
+        text = f"{text}\n\n{t(lang, 'session_pending_psych_badge')}"
     try:
         await callback.message.edit_text(text,
             reply_markup=session_card_keyboard(session_id, lang))
@@ -224,32 +231,54 @@ async def reschedule_got_dt(message: Message, state: FSMContext, bot: Bot):
 
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT client_name FROM sessions WHERE id = ? AND psychologist_id = ?",
+            "SELECT client_name, scheduled_at FROM sessions WHERE id = ? AND psychologist_id = ?",
             (session_id, message.from_user.id)
         )
         row = await cur.fetchone()
         if not row:
             await message.answer(t(lang, "session_not_found"))
             return
-        client_name = row[0]
+        client_name, old_utc_str = row
         cur = await db.execute(
-            "SELECT telegram_id FROM clients WHERE psychologist_id = ? AND name = ?",
+            "SELECT telegram_id, utc_offset FROM clients WHERE psychologist_id = ? AND name = ?",
             (message.from_user.id, client_name)
         )
         client_row = await cur.fetchone()
+        # Propose reschedule: write new time without moving scheduled_at yet
         await db.execute(
-            "UPDATE sessions SET scheduled_at = ?, reminded_24h = 0, reminded_1h = 0 WHERE id = ?",
+            "UPDATE sessions SET proposed_start_datetime_utc = ?, "
+            "booking_status = 'pending_client' WHERE id = ?",
             (utc_dt_str, session_id)
         )
         await db.commit()
 
+    await message.answer(
+        t(lang, "session_reschedule_proposed", client=client_name))
+
     if client_row and client_row[0]:
-        c_lang = await get_client_lang(client_row[0])
-        _, c_offset = await get_client_timezone(client_row[0])
-        client_local = utc_to_local(utc_dt_str, c_offset)
-        await bot.send_message(client_row[0],
-            t(c_lang, "session_rescheduled_notify", date=client_local))
-    await message.answer(t(lang, "session_rescheduled", id=session_id, date=local_dt_str))
+        client_tg, client_offset = client_row
+        c_lang = await get_client_lang(client_tg)
+        old_local = utc_to_local(old_utc_str, client_offset)
+        new_local = utc_to_local(utc_dt_str, client_offset)
+        old_display = datetime.strptime(old_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        new_display = datetime.strptime(new_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=t(c_lang, "btn_rsc_confirm"),
+                callback_data=f"bkc_rsc_confirm_{session_id}"),
+            InlineKeyboardButton(
+                text=t(c_lang, "btn_rsc_contact"),
+                callback_data=f"bkc_rsc_contact_{session_id}"),
+        ]])
+        try:
+            await bot.send_message(
+                client_tg,
+                t(c_lang, "booking_reschedule_propose_client",
+                  old_datetime=old_display, new_datetime=new_display),
+                parse_mode="Markdown",
+                reply_markup=kb)
+        except Exception as e:
+            log.warning("RSC: notify client failed session_id=%d: %s", session_id, e)
 
 
 # ── Legacy slash commands ──────────────────────────────────────────────────
@@ -350,28 +379,140 @@ async def reschedule_session_cmd(message: Message, bot: Bot):
     utc_dt_str = local_to_utc(local_dt_str, psych_offset)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT client_name FROM sessions WHERE id = ? AND psychologist_id = ?",
+            "SELECT client_name, scheduled_at FROM sessions WHERE id = ? AND psychologist_id = ?",
             (session_id, message.from_user.id)
         )
         row = await cur.fetchone()
         if not row:
             await message.answer(t(lang, "session_not_found"))
             return
-        client_name = row[0]
+        client_name, old_utc_str = row
         cur = await db.execute(
-            "SELECT telegram_id FROM clients WHERE psychologist_id = ? AND name = ?",
+            "SELECT telegram_id, utc_offset FROM clients WHERE psychologist_id = ? AND name = ?",
             (message.from_user.id, client_name)
         )
         client_row = await cur.fetchone()
         await db.execute(
-            "UPDATE sessions SET scheduled_at = ?, reminded_24h = 0, reminded_1h = 0 WHERE id = ?",
+            "UPDATE sessions SET proposed_start_datetime_utc = ?, "
+            "booking_status = 'pending_client' WHERE id = ?",
             (utc_dt_str, session_id)
         )
         await db.commit()
+    await message.answer(
+        t(lang, "session_reschedule_proposed", client=client_name))
     if client_row and client_row[0]:
-        c_lang = await get_client_lang(client_row[0])
-        _, c_offset = await get_client_timezone(client_row[0])
-        client_local = utc_to_local(utc_dt_str, c_offset)
-        await bot.send_message(client_row[0],
-            t(c_lang, "session_rescheduled_notify", date=client_local))
-    await message.answer(t(lang, "session_rescheduled", id=session_id, date=local_dt_str))
+        client_tg, client_offset = client_row
+        c_lang = await get_client_lang(client_tg)
+        old_local = utc_to_local(old_utc_str, client_offset)
+        new_local = utc_to_local(utc_dt_str, client_offset)
+        old_display = datetime.strptime(old_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        new_display = datetime.strptime(new_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=t(c_lang, "btn_rsc_confirm"),
+                callback_data=f"bkc_rsc_confirm_{session_id}"),
+            InlineKeyboardButton(
+                text=t(c_lang, "btn_rsc_contact"),
+                callback_data=f"bkc_rsc_contact_{session_id}"),
+        ]])
+        try:
+            await bot.send_message(
+                client_tg,
+                t(c_lang, "booking_reschedule_propose_client",
+                  old_datetime=old_display, new_datetime=new_display),
+                parse_mode="Markdown",
+                reply_markup=kb)
+        except Exception as e:
+            log.warning("RSC_CMD: notify client failed session_id=%d: %s", session_id, e)
+
+
+# ── bkc_rsc_confirm_{id} — client confirms psychologist's reschedule ────────
+
+@router.callback_query(F.data.regexp(r"^bkc_rsc_confirm_\d+$"))
+async def bkc_rsc_confirm_cb(callback: CallbackQuery, bot: Bot):
+    """Client accepts the psychologist's proposed new session time."""
+    session_id = int(callback.data.split("_")[3])
+    uid = callback.from_user.id
+    c_lang = await get_client_lang(uid)
+    await callback.answer()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT psychologist_id, client_name, scheduled_at, "
+            "proposed_start_datetime_utc, booking_status FROM sessions WHERE id = ?",
+            (session_id,))
+        row = await cur.fetchone()
+        if not row:
+            return
+        psych_id, client_name, old_utc, proposed_utc, status = row
+        if status != "pending_client" or not proposed_utc:
+            # Already confirmed (double tap) — silent ignore
+            return
+        # Commit the new time: move proposed → scheduled_at, reset reminders
+        await db.execute(
+            "UPDATE sessions SET scheduled_at = ?, proposed_start_datetime_utc = NULL, "
+            "booking_status = 'confirmed', reminded_24h = 0, reminded_1h = 0 WHERE id = ?",
+            (proposed_utc, session_id))
+        await db.commit()
+
+    # Confirm to client
+    _, c_offset = await get_client_timezone(uid)
+    new_local = utc_to_local(proposed_utc, c_offset)
+    new_display = datetime.strptime(new_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    try:
+        await callback.message.edit_text(
+            t(c_lang, "booking_rsc_confirmed_client", datetime=new_display),
+            reply_markup=None)
+    except Exception:
+        await callback.message.answer(
+            t(c_lang, "booking_rsc_confirmed_client", datetime=new_display))
+
+    # Notify psychologist
+    p_lang = await get_user_lang(psych_id)
+    _, p_offset = await get_user_timezone(psych_id)
+    p_local = utc_to_local(proposed_utc, p_offset)
+    p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    try:
+        await bot.send_message(
+            psych_id,
+            t(p_lang, "booking_rsc_confirmed_psych",
+              client=client_name, datetime=p_display))
+    except Exception as e:
+        log.warning("bkc_rsc_confirm: psych notify failed: %s", e)
+
+    log.info("RSC: client confirmed reschedule session_id=%d new_utc=%s", session_id, proposed_utc)
+
+
+# ── bkc_rsc_contact_{id} — client signals they can't make the new time ──────
+
+@router.callback_query(F.data.regexp(r"^bkc_rsc_contact_\d+$"))
+async def bkc_rsc_contact_cb(callback: CallbackQuery, bot: Bot):
+    """Client cannot make the proposed time — notify psychologist to get in touch."""
+    session_id = int(callback.data.split("_")[3])
+    uid = callback.from_user.id
+    await callback.answer()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT psychologist_id, client_name FROM sessions WHERE id = ?",
+            (session_id,))
+        row = await cur.fetchone()
+        if not row:
+            return
+        psych_id, client_name = row
+
+    # Remove buttons so client can't tap again
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    p_lang = await get_user_lang(psych_id)
+    try:
+        await bot.send_message(
+            psych_id,
+            t(p_lang, "booking_rsc_contact_psych", client=client_name))
+    except Exception as e:
+        log.warning("bkc_rsc_contact: psych notify failed: %s", e)
+
+    log.info("RSC: client requested contact session_id=%d", session_id)

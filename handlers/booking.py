@@ -10,7 +10,10 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
 
-from database import DB_PATH, format_offset, get_client_lang, now_str, now_utc
+from database import (
+    DB_PATH, format_offset, get_client_lang, get_user_lang, get_user_timezone,
+    now_str, now_utc, utc_to_local,
+)
 from keyboards import cancel_keyboard, timezone_keyboard
 from states.booking_states import BookingClientForm
 from translations import t
@@ -161,9 +164,13 @@ async def get_psych_tz_offset(tz_name: str) -> int:
 
 
 async def get_booked_slots(psych_id: int) -> set[str]:
+    """Return UTC slot strings that are taken (confirmed or pending psych approval).
+    Declined/deleted sessions are excluded so their slots reappear as free."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT scheduled_at FROM sessions WHERE psychologist_id = ?", (psych_id,))
+            "SELECT scheduled_at FROM sessions WHERE psychologist_id = ? "
+            "AND (booking_status IN ('confirmed', 'pending_psych') OR booking_status IS NULL)",
+            (psych_id,))
         return {row[0] for row in await cur.fetchall()}
 
 
@@ -525,7 +532,7 @@ async def bkc_back_dates_cb(callback: CallbackQuery):
 
 @router.callback_query(F.data.regexp(r"^bkc_confirm_\d+_\d{8}T\d{4}_-?\d+$"))
 async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
-    """Client confirms booking — INSERT session with UNIQUE guard."""
+    """Client requests booking — rate-limit, then create pending_psych session."""
     parts = callback.data.split("_")
     psych_id = int(parts[2])
     slot_compact = parts[3]
@@ -539,6 +546,18 @@ async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
     local_dt = utc_dt + timedelta(minutes=client_offset)
     display = local_dt.strftime("%d.%m.%Y %H:%M")
 
+    # Rate limit: max 5 requests per client per 24h (across all psychologists)
+    cutoff = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM booking_requests_log "
+            "WHERE client_telegram_id = ? AND requested_at_utc >= ?",
+            (uid, cutoff))
+        (req_count,) = await cur.fetchone()
+    if req_count >= 5:
+        await callback.message.answer(t(lang, "booking_limit_reached"))
+        return
+
     # Ensure client record exists
     full_name = " ".join(filter(None, [
         callback.from_user.first_name or "",
@@ -551,13 +570,23 @@ async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
         await callback.message.answer(t(lang, "booking_error"))
         return
 
-    # INSERT with UNIQUE constraint protection
+    # Log the request (counts toward daily limit regardless of outcome)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO booking_requests_log "
+            "(client_telegram_id, psych_id, requested_at_utc) VALUES (?, ?, ?)",
+            (uid, psych_id, now_utc()))
+        await db.commit()
+
+    # INSERT with UNIQUE constraint — slot may already be pending or confirmed
     try:
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT INTO sessions (psychologist_id, client_name, scheduled_at, topic) "
-                "VALUES (?, ?, ?, ?)",
+            cur = await db.execute(
+                "INSERT INTO sessions "
+                "(psychologist_id, client_name, scheduled_at, topic, booking_status) "
+                "VALUES (?, ?, ?, ?, 'pending_psych')",
                 (psych_id, client_name, utc_str, "self-booked"))
+            session_id = cur.lastrowid
             await db.commit()
     except Exception as e:
         if "UNIQUE" in str(e).upper():
@@ -575,26 +604,156 @@ async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
         row = await cur.fetchone()
     display_name = row[0] if row else "Specialist"
 
-    # Confirm to client
-    await callback.message.edit_text(
-        t(lang, "booking_success",
-          datetime=display, name=display_name),
-        parse_mode="Markdown")
+    # Tell client: awaiting psychologist confirmation
+    try:
+        await callback.message.edit_text(
+            t(lang, "booking_pending_client", datetime=display, name=display_name),
+            parse_mode="Markdown")
+    except Exception:
+        await callback.message.answer(
+            t(lang, "booking_pending_client", datetime=display, name=display_name),
+            parse_mode="Markdown")
 
-    # Notify psychologist
-    from database import get_user_lang, get_user_timezone, utc_to_local
+    # Notify psychologist with Confirm / Reject buttons
     p_lang = await get_user_lang(psych_id)
     _, p_offset = await get_user_timezone(psych_id)
     p_local = utc_to_local(utc_str, p_offset)
-    p_local_dt = datetime.strptime(p_local, "%Y-%m-%d %H:%M")
-    p_display = p_local_dt.strftime("%d.%m.%Y %H:%M")
+    p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=t(p_lang, "btn_booking_approve"),
+            callback_data=f"bkc_approve_{session_id}"),
+        InlineKeyboardButton(
+            text=t(p_lang, "btn_booking_reject"),
+            callback_data=f"bkc_reject_{session_id}"),
+    ]])
     try:
         await bot.send_message(
             psych_id,
-            t(p_lang, "booking_psych_notify",
+            t(p_lang, "booking_psych_new_request",
               client=client_name, datetime=p_display),
-            parse_mode="Markdown")
+            parse_mode="Markdown",
+            reply_markup=kb)
     except Exception as e:
         log.warning("BOOKING: psych notify failed psych_id=%d: %s", psych_id, e)
 
-    log.info("BOOKING: confirmed psych_id=%d client=%s utc=%s", psych_id, client_name, utc_str)
+    log.info("BOOKING: pending_psych session_id=%d psych_id=%d client=%s utc=%s",
+             session_id, psych_id, client_name, utc_str)
+
+
+# ── bkc_approve_{session_id} — psychologist confirms booking request ────────
+
+@router.callback_query(F.data.regexp(r"^bkc_approve_\d+$"))
+async def bkc_approve_cb(callback: CallbackQuery, bot: Bot):
+    """Psychologist confirms a pending_psych booking request."""
+    session_id = int(callback.data.split("_")[2])
+    psych_id = callback.from_user.id
+    p_lang = await get_user_lang(psych_id)
+    await callback.answer()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT client_name, scheduled_at, booking_status FROM sessions "
+            "WHERE id = ? AND psychologist_id = ?",
+            (session_id, psych_id))
+        row = await cur.fetchone()
+        if not row or row[2] != "pending_psych":
+            # Already handled (double tap or wrong session)
+            return
+        client_name, utc_str, _ = row
+        cur = await db.execute(
+            "SELECT telegram_id, utc_offset FROM clients "
+            "WHERE psychologist_id = ? AND name = ?",
+            (psych_id, client_name))
+        client_row = await cur.fetchone()
+        await db.execute(
+            "UPDATE sessions SET booking_status = 'confirmed' WHERE id = ?",
+            (session_id,))
+        await db.commit()
+
+    # Update psych's notification message (remove buttons)
+    _, p_offset = await get_user_timezone(psych_id)
+    p_local = utc_to_local(utc_str, p_offset)
+    p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    try:
+        await callback.message.edit_text(
+            t(p_lang, "booking_psych_approved_notify",
+              client=client_name, datetime=p_display),
+            reply_markup=None)
+    except Exception:
+        pass
+
+    # Notify client
+    if client_row and client_row[0]:
+        client_tg, client_offset = client_row
+        c_lang = await get_client_lang(client_tg)
+        c_local = utc_to_local(utc_str, client_offset)
+        c_display = datetime.strptime(c_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT display_name FROM booking_profile WHERE psych_id = ?", (psych_id,))
+            bp_row = await cur.fetchone()
+        display_name = bp_row[0] if bp_row else "Specialist"
+        try:
+            await bot.send_message(
+                client_tg,
+                t(c_lang, "booking_approved_client",
+                  datetime=c_display, name=display_name),
+                parse_mode="Markdown")
+        except Exception as e:
+            log.warning("BOOKING: approve client notify failed: %s", e)
+
+    log.info("BOOKING: approved session_id=%d psych_id=%d", session_id, psych_id)
+
+
+# ── bkc_reject_{session_id} — psychologist rejects booking request ──────────
+
+@router.callback_query(F.data.regexp(r"^bkc_reject_\d+$"))
+async def bkc_reject_cb(callback: CallbackQuery, bot: Bot):
+    """Psychologist rejects a pending_psych booking request. Slot is freed."""
+    session_id = int(callback.data.split("_")[2])
+    psych_id = callback.from_user.id
+    await callback.answer()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT client_name, scheduled_at, booking_status FROM sessions "
+            "WHERE id = ? AND psychologist_id = ?",
+            (session_id, psych_id))
+        row = await cur.fetchone()
+        if not row or row[2] != "pending_psych":
+            return
+        client_name, _, _ = row
+        cur = await db.execute(
+            "SELECT telegram_id, utc_offset FROM clients "
+            "WHERE psychologist_id = ? AND name = ?",
+            (psych_id, client_name))
+        client_row = await cur.fetchone()
+        # Delete rejected request — slot is freed for other clients
+        await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        await db.commit()
+
+    # Remove buttons from psych's notification message (keeps request text visible)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Notify client with "choose another time" button
+    if client_row and client_row[0]:
+        client_tg, client_offset = client_row
+        c_lang = await get_client_lang(client_tg)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=t(c_lang, "btn_booking_try_again"),
+                callback_data=f"bkc_back_dates_{psych_id}_{client_offset}")
+        ]])
+        try:
+            await bot.send_message(
+                client_tg,
+                t(c_lang, "booking_declined_client"),
+                reply_markup=kb)
+        except Exception as e:
+            log.warning("BOOKING: reject client notify failed: %s", e)
+
+    log.info("BOOKING: rejected session_id=%d psych_id=%d", session_id, psych_id)

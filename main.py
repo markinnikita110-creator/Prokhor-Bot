@@ -144,7 +144,8 @@ async def reminder_loop():
                     "FROM sessions s "
                     "LEFT JOIN clients c ON c.psychologist_id = s.psychologist_id "
                     "  AND c.name = s.client_name "
-                    "WHERE s.reminded_1h = 0"
+                    "WHERE s.reminded_1h = 0 "
+                    "AND (s.booking_status = 'confirmed' OR s.booking_status IS NULL)"
                 )
                 sessions = await cur.fetchall()
 

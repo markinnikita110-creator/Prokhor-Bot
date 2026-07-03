@@ -335,6 +335,14 @@ async def migrate_db():
             await db.execute("ALTER TABLE sessions ADD COLUMN recurring INTEGER DEFAULT 0")
         if "days_of_week" not in session_cols:
             await db.execute("ALTER TABLE sessions ADD COLUMN days_of_week TEXT DEFAULT ''")
+        if "booking_status" not in session_cols:
+            await db.execute(
+                "ALTER TABLE sessions ADD COLUMN booking_status TEXT DEFAULT 'confirmed'"
+            )
+        if "proposed_start_datetime_utc" not in session_cols:
+            await db.execute(
+                "ALTER TABLE sessions ADD COLUMN proposed_start_datetime_utc TEXT"
+            )
 
         # clients — recurring_paused for individual recurring sessions
         cur = await db.execute("PRAGMA table_info(clients)")
@@ -423,6 +431,16 @@ async def migrate_db():
             )
         except Exception:
             pass  # skip if existing data has duplicates
+
+        # BOOKING: rate-limit log (5 requests per client per 24h across all psychs)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS booking_requests_log (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_telegram_id INTEGER NOT NULL,
+                psych_id           INTEGER NOT NULL,
+                requested_at_utc   TEXT NOT NULL
+            )
+        """)
 
         await db.commit()
 

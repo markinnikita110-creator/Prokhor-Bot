@@ -694,6 +694,59 @@ TEXTS = {
             "Date: {datetime} (your time)\n\n"
             "ℹ️ Booked by the client via self-booking link."
         ),
+        # ── Booking: request → confirm flow ───────────────────────────────
+        "booking_pending_client": (
+            "⏳ Your booking request has been sent!\n\n"
+            "📅 {datetime} (your time)\n"
+            "👤 {name}\n\n"
+            "Please wait for the specialist to confirm your slot."
+        ),
+        "booking_psych_new_request": (
+            "📬 *New booking request!*\n\n"
+            "Client: {client}\n"
+            "Requested slot: {datetime} (your time)\n\n"
+            "Please confirm or decline:"
+        ),
+        "booking_approved_client": (
+            "✅ Your booking has been confirmed!\n\n"
+            "📅 {datetime} (your time)\n"
+            "👤 {name}\n\n"
+            "You'll get reminders 24h and 1h before your session."
+        ),
+        "booking_declined_client": (
+            "😔 The specialist couldn't confirm this time slot.\n"
+            "Please choose a different slot."
+        ),
+        "booking_limit_reached": (
+            "⚠️ You've reached the daily limit of 5 booking requests.\n"
+            "Please try again tomorrow."
+        ),
+        "btn_booking_approve":     "✅ Confirm",
+        "btn_booking_reject":      "❌ Decline",
+        "btn_booking_try_again":   "📅 Choose another time",
+        "booking_psych_approved_notify": (
+            "✅ You confirmed the booking for {client} on {datetime}."
+        ),
+        # ── Booking: reschedule → client confirmation flow ─────────────────
+        "booking_reschedule_propose_client": (
+            "🔄 *Reschedule proposal*\n\n"
+            "Your specialist is proposing to move your session:\n"
+            "Old time: {old_datetime} (your time)\n"
+            "New time: {new_datetime} (your time)\n\n"
+            "Please confirm or let us know if the time doesn't work:"
+        ),
+        "btn_rsc_confirm":  "✅ Confirm new time",
+        "btn_rsc_contact":  "✉️ Contact me",
+        "booking_rsc_confirmed_psych": (
+            "✅ {client} confirmed the reschedule to {datetime}."
+        ),
+        "booking_rsc_contact_psych": (
+            "✉️ {client} cannot make the new time and is asking you to get in touch."
+        ),
+        "session_pending_client_badge": "⏳ Awaiting client confirmation of reschedule",
+        "session_pending_psych_badge":  "⏳ Awaiting your confirmation",
+        "booking_rsc_confirmed_client": "✅ Reschedule confirmed!\n\n📅 New time: {datetime} (your time)",
+        "session_reschedule_proposed":  "⏳ Reschedule proposed to {client}. Waiting for their confirmation.",
     },
 
     "ru": {
@@ -1391,6 +1444,59 @@ TEXTS = {
             "Дата: {datetime} (ваше время)\n\n"
             "ℹ️ Клиент записался самостоятельно через ссылку самозаписи."
         ),
+        # ── Самозапись: флоу запрос → подтверждение ───────────────────────
+        "booking_pending_client": (
+            "⏳ Ваша заявка на запись отправлена!\n\n"
+            "📅 {datetime} (ваше время)\n"
+            "👤 {name}\n\n"
+            "Ожидайте подтверждения от специалиста."
+        ),
+        "booking_psych_new_request": (
+            "📬 *Новая заявка на запись!*\n\n"
+            "Клиент: {client}\n"
+            "Запрошенный слот: {datetime} (ваше время)\n\n"
+            "Подтвердите или отклоните заявку:"
+        ),
+        "booking_approved_client": (
+            "✅ Ваша запись подтверждена!\n\n"
+            "📅 {datetime} (ваше время)\n"
+            "👤 {name}\n\n"
+            "Напомню за 24ч и за 1ч до сессии."
+        ),
+        "booking_declined_client": (
+            "😔 Специалист не смог подтвердить этот слот.\n"
+            "Пожалуйста, выберите другое время."
+        ),
+        "booking_limit_reached": (
+            "⚠️ Вы достигли дневного лимита заявок (5 в сутки).\n"
+            "Попробуйте снова завтра."
+        ),
+        "btn_booking_approve":     "✅ Подтвердить",
+        "btn_booking_reject":      "❌ Отклонить",
+        "btn_booking_try_again":   "📅 Выбрать другое время",
+        "booking_psych_approved_notify": (
+            "✅ Вы подтвердили запись {client} на {datetime}."
+        ),
+        # ── Самозапись: перенос → подтверждение клиентом ──────────────────
+        "booking_reschedule_propose_client": (
+            "🔄 *Предложение о переносе сессии*\n\n"
+            "Специалист предлагает перенести вашу сессию:\n"
+            "Старое время: {old_datetime} (ваше время)\n"
+            "Новое время: {new_datetime} (ваше время)\n\n"
+            "Подтвердите или дайте знать, если время не подходит:"
+        ),
+        "btn_rsc_confirm":  "✅ Подтверждаю",
+        "btn_rsc_contact":  "✉️ Свяжитесь со мной",
+        "booking_rsc_confirmed_psych": (
+            "✅ {client} подтвердил(а) перенос на {datetime}."
+        ),
+        "booking_rsc_contact_psych": (
+            "✉️ {client} не может в новое время и просит вас связаться."
+        ),
+        "session_pending_client_badge": "⏳ Ожидает подтверждения переноса клиентом",
+        "session_pending_psych_badge":  "⏳ Ожидает вашего подтверждения",
+        "booking_rsc_confirmed_client": "✅ Перенос подтверждён!\n\n📅 Новое время: {datetime} (ваше время)",
+        "session_reschedule_proposed":  "⏳ Предложение о переносе отправлено клиенту {client}. Ожидаем подтверждения.",
     },
 }
 
