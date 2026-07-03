@@ -2,3 +2,7 @@ aiogram
 aiosqlite
 pytz
 apscheduler
+aiogram
+aiosqlite
+apscheduler
+pytz
