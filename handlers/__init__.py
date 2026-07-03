@@ -1,4 +1,5 @@
 from . import (  # noqa: F401
+    admin_panel,
     legal, menu, clients, sessions, homework, notes,
     analytics, checkins, settings, timezone,
     cohorts, supervision, client_sessions, plans,
@@ -6,6 +7,7 @@ from . import (  # noqa: F401
 )
 
 routers = [
+    admin_panel.router,        # ADMIN: /admin command + adm: callbacks, highest priority
     legal.router,              # LEGAL: consent callbacks first
     menu.router,
     plans.router,              # PLANS: /promo, /myplan, st_tariff and sub-screens

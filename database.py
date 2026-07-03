@@ -253,6 +253,14 @@ async def init_db():
                 created_at    TEXT NOT NULL
             );
 
+            -- ADMIN: audit log for admin actions
+            CREATE TABLE IF NOT EXISTS admin_actions_log (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_type    TEXT NOT NULL,
+                details        TEXT,
+                created_at_utc TEXT NOT NULL
+            );
+
             -- BOOKING: psychologist public booking profile
             CREATE TABLE IF NOT EXISTS booking_profile (
                 psych_id        INTEGER PRIMARY KEY,
@@ -379,6 +387,15 @@ async def migrate_db():
                     created_at    TEXT NOT NULL
                 )
             """)
+
+        # ADMIN: audit log
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS admin_actions_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_type TEXT NOT NULL,
+                details TEXT,
+                created_at_utc TEXT NOT NULL)"""
+        )
 
         # BOOKING: new tables (safe for existing DBs)
         for tbl_sql in [

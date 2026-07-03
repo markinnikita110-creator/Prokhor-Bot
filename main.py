@@ -26,6 +26,8 @@ from handlers.cohorts import generate_recurring_cohort_sessions  # RECURRING
 from handlers.legal import ConsentMiddleware
 from translations import t
 
+BOT_START_TIME = datetime.utcnow()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -420,6 +422,8 @@ async def main():
     from handlers.booking import set_bot_username_booking_client
     set_bot_username_booking(username)
     set_bot_username_booking_client(username)
+    from handlers.admin_panel import set_start_time
+    set_start_time(BOT_START_TIME)
     log.info("Bot started: @%s", username)
 
     await bot.set_my_commands([
