@@ -5,6 +5,7 @@ Entry point: sets up bot, registers all routers, runs reminder loop, starts poll
 import asyncio
 import logging
 import os
+import sqlite3
 from datetime import datetime, timedelta
 
 import aiosqlite
@@ -20,6 +21,7 @@ from database import (
     get_user_timezone, get_cohort_member_lang, get_cohort_member_timezone,
     init_db, migrate_db, now_str, utc_to_local,
 )
+from db_guard import ensure_db_schema
 from handlers import routers
 from handlers.clients import set_bot_username
 from handlers.cohorts import generate_recurring_cohort_sessions  # RECURRING
@@ -462,4 +464,12 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Self-healing: ensure schema is current before the async event loop starts.
+    # Runs synchronously so any missing tables/columns are added before polling.
+    _guard_conn = sqlite3.connect(DB_PATH)
+    try:
+        ensure_db_schema(_guard_conn)
+    finally:
+        _guard_conn.close()
+
     asyncio.run(main())
