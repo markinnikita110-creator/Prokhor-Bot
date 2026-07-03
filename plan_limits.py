@@ -22,6 +22,7 @@ PLANS: dict[str, dict] = {
         "faq": False,
         "ai_assistant": False,
         "polls": False,
+        "self_booking": False,
     },
     "pro": {
         "name": "Pro",
@@ -35,6 +36,7 @@ PLANS: dict[str, dict] = {
         "faq": True,
         "ai_assistant": True,
         "polls": True,
+        "self_booking": True,
     },
 }
 

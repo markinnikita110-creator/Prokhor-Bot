@@ -114,6 +114,9 @@ def summary_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
     )
 
 
+MENU_SET_BOOKING = _all("btn_set_booking")
+
+
 def settings_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
     # MENU: Settings submenu
     return ReplyKeyboardMarkup(
@@ -122,6 +125,7 @@ def settings_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
              KeyboardButton(text=t(lang, "btn_set_timezone"))],
             [KeyboardButton(text=t(lang, "btn_set_tariff")),
              KeyboardButton(text=t(lang, "btn_set_notifs"))],
+            [KeyboardButton(text=t(lang, "btn_set_booking"))],
             [KeyboardButton(text=t(lang, "btn_menu_back"))],
         ],
         resize_keyboard=True,
@@ -354,6 +358,7 @@ def settings_keyboard(lang: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=t(lang, "btn_language"), callback_data="st_lang")],
         [InlineKeyboardButton(text=t(lang, "btn_timezone"), callback_data="st_tz")],
         [InlineKeyboardButton(text=tariff_label,            callback_data="st_tariff")],
+        [InlineKeyboardButton(text=t(lang, "btn_set_booking"), callback_data="st_booking")],
         [InlineKeyboardButton(text=t(lang, "btn_about"),    callback_data="st_about")],
         [InlineKeyboardButton(text=t(lang, "btn_main_menu"),callback_data="m_home")],
     ])

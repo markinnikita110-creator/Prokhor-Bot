@@ -252,6 +252,38 @@ async def init_db():
                 used_count    INTEGER NOT NULL DEFAULT 0,
                 created_at    TEXT NOT NULL
             );
+
+            -- BOOKING: psychologist public booking profile
+            CREATE TABLE IF NOT EXISTS booking_profile (
+                psych_id        INTEGER PRIMARY KEY,
+                slug            TEXT UNIQUE NOT NULL,
+                display_name    TEXT,
+                bio             TEXT,
+                timezone        TEXT NOT NULL DEFAULT 'UTC',
+                booking_enabled INTEGER DEFAULT 0,
+                created_at      TEXT
+            );
+
+            -- BOOKING: weekly availability rules (one row per weekday per psych)
+            CREATE TABLE IF NOT EXISTS availability_rules (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                psych_id             INTEGER NOT NULL,
+                weekday              INTEGER NOT NULL,
+                start_time           TEXT NOT NULL,
+                end_time             TEXT NOT NULL,
+                session_duration_min INTEGER NOT NULL,
+                buffer_min           INTEGER DEFAULT 0
+            );
+
+            -- BOOKING: blocked date/time exceptions
+            CREATE TABLE IF NOT EXISTS availability_exceptions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                psych_id   INTEGER NOT NULL,
+                date       TEXT NOT NULL,
+                start_time TEXT,
+                end_time   TEXT,
+                type       TEXT NOT NULL DEFAULT 'blocked'
+            );
         """)
         await db.commit()
 
@@ -347,6 +379,33 @@ async def migrate_db():
                     created_at    TEXT NOT NULL
                 )
             """)
+
+        # BOOKING: new tables (safe for existing DBs)
+        for tbl_sql in [
+            """CREATE TABLE IF NOT EXISTS booking_profile (
+                psych_id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL,
+                display_name TEXT, bio TEXT, timezone TEXT NOT NULL DEFAULT 'UTC',
+                booking_enabled INTEGER DEFAULT 0, created_at TEXT)""",
+            """CREATE TABLE IF NOT EXISTS availability_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, psych_id INTEGER NOT NULL,
+                weekday INTEGER NOT NULL, start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL, session_duration_min INTEGER NOT NULL,
+                buffer_min INTEGER DEFAULT 0)""",
+            """CREATE TABLE IF NOT EXISTS availability_exceptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, psych_id INTEGER NOT NULL,
+                date TEXT NOT NULL, start_time TEXT, end_time TEXT,
+                type TEXT NOT NULL DEFAULT 'blocked')""",
+        ]:
+            await db.execute(tbl_sql)
+
+        # BOOKING: unique index on sessions to prevent double-booking
+        try:
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_psych_slot "
+                "ON sessions(psychologist_id, scheduled_at)"
+            )
+        except Exception:
+            pass  # skip if existing data has duplicates
 
         await db.commit()
 

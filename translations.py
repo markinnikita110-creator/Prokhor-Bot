@@ -600,6 +600,88 @@ TEXTS = {
         "btn_tariff_history":  "📜 Payment history",
         "btn_tariff_howto":    "❓ How does this work?",
         "btn_tariff_back":     "⬅️ Back",
+
+        # ── Self-booking: psychologist settings ───────────────────────────
+        "btn_set_booking":           "📅 Client Booking",
+        "section_booking":           "📅 Client Booking",
+        "booking_pro_only":          "⚠️ Client self-booking is available on the Pro plan only.\nEnter a promo code: /promo",
+        "booking_no_profile":        "You haven't set up your booking profile yet.",
+        "btn_booking_setup":         "🛠 Set Up Booking Profile",
+        "ask_booking_display_name":  "👤 What name should clients see on your booking page?\n(e.g. your full name or professional name):",
+        "ask_booking_bio":           "📝 Write a short bio for clients (up to 300 characters).\nThis appears on your booking page:",
+        "booking_bio_too_long":      "⚠️ Bio is too long ({length} chars). Please keep it under 300 characters:",
+        "ask_booking_timezone":      "🕐 Choose your working timezone — slots will be generated in this timezone:",
+        "booking_profile_saved":     "✅ Booking profile created! Now configure your weekly schedule.",
+        "booking_profile_card":      (
+            "📅 *Your Booking Profile*\n\n"
+            "👤 Name: {display_name}\n"
+            "📝 Bio: {bio}\n"
+            "🔗 Slug: `{slug}`\n"
+            "🕐 Timezone: {timezone}\n"
+            "Status: {status}\n\n"
+            "Booking link:\n`{link}`"
+        ),
+        "booking_enabled_on":        "🟢 Accepting bookings",
+        "booking_enabled_off":       "🔴 Booking paused",
+        "booking_toggled_on":        "✅ Booking enabled — clients can now book sessions.",
+        "booking_toggled_off":       "❌ Booking paused — your link shows 'not accepting bookings'.",
+        "btn_booking_toggle_on":     "▶️ Enable Booking",
+        "btn_booking_toggle_off":    "⏸ Pause Booking",
+        "btn_booking_schedule":      "📋 Weekly Schedule",
+        "btn_booking_exceptions":    "🚫 Blocked Dates",
+        "btn_booking_link":          "🔗 Booking Link",
+        "btn_booking_edit_name":     "✏️ Edit Name",
+        "btn_booking_edit_bio":      "✏️ Edit Bio",
+        "btn_booking_edit_tz":       "🕐 Change Timezone",
+        "booking_link_msg":          "🔗 Your booking link:\n\n`{link}`\n\nShare this with clients so they can book sessions.",
+        "booking_schedule_title":    "📋 *Weekly Schedule*\n\nTap a day to configure it:",
+        "booking_day_configured":    "✅ {day}: {start}–{end} ({duration} min + {buffer} min break)",
+        "booking_day_none":          "➖ {day}: not configured",
+        "ask_booking_day_start":     "⏰ *{day}*\nEnter start of working hours (HH:MM, e.g. 10:00):",
+        "ask_booking_day_end":       "Enter end of working hours (HH:MM, e.g. 18:00):",
+        "ask_booking_day_duration":  "Enter session duration in minutes (e.g. 50):",
+        "ask_booking_day_buffer":    "Enter break between sessions in minutes (0 = no break):",
+        "booking_day_saved":         "✅ Schedule saved for {day}.",
+        "booking_day_removed":       "🗑 Schedule removed for {day}.",
+        "booking_invalid_time":      "⚠️ Invalid format. Enter as HH:MM (e.g. 10:00):",
+        "booking_invalid_number":    "⚠️ Please enter a whole number:",
+        "booking_time_order":        "⚠️ End time must be after start time. Re-enter end time:",
+        "btn_booking_remove_day":    "🗑 Remove This Day",
+        "booking_exceptions_title":  "🚫 *Blocked Dates*\n\n{items}",
+        "booking_no_exceptions":     "No blocked dates configured.",
+        "booking_exception_row":     "• {date} {time_range}",
+        "booking_exception_whole_day": "(whole day)",
+        "ask_booking_ex_date":       "Enter the date to block (DD.MM.YYYY or YYYY-MM-DD):",
+        "ask_booking_ex_start":      "Enter block start time (HH:MM), or tap 'Whole Day':",
+        "ask_booking_ex_end":        "Enter block end time (HH:MM):",
+        "booking_ex_saved":          "✅ Date blocked: {date}.",
+        "booking_invalid_date":      "⚠️ Invalid date. Enter as DD.MM.YYYY or YYYY-MM-DD:",
+        "btn_booking_add_exception": "➕ Add Blocked Date",
+        "btn_booking_whole_day":     "🚫 Whole Day",
+        "btn_booking_del_ex":        "🗑 Remove",
+
+        # ── Self-booking: client-facing ───────────────────────────────────
+        "booking_card_text":         "👤 *{display_name}*\n\n{bio}",
+        "btn_booking_book":          "📅 Book a Session",
+        "booking_unavailable":       "⚠️ This specialist is not accepting bookings right now. Please try again later.",
+        "booking_profile_not_found": "😕 Booking page not found. The link may be outdated.",
+        "ask_client_tz_booking":     "🕐 To show available slots in your local time, please choose your timezone:",
+        "booking_no_slots":          "😕 No available slots in the next 14 days. Please check back later.",
+        "booking_dates_title":       "📅 Choose a date:",
+        "booking_slots_title":       "🕐 Slots on {date} (your time):",
+        "booking_confirm_text":      "✅ *Confirm booking*\n\n📅 {datetime} (your time)\n👤 {name}\n\nBook this session?",
+        "btn_booking_confirm":       "✅ Confirm",
+        "btn_booking_back_dates":    "⬅️ Other dates",
+        "btn_booking_back_slots":    "⬅️ Other times",
+        "booking_success":           "🎉 Session booked!\n\n📅 *{datetime}* (your time)\n👤 {name}\n\nYou'll get reminders 24h and 1h before your session.",
+        "booking_slot_taken":        "⚠️ This slot was just taken. Please choose another time.",
+        "booking_error":             "⚠️ Something went wrong. Please try again.",
+        "booking_psych_notify":      (
+            "📅 *New self-booking!*\n\n"
+            "Client: {client}\n"
+            "Date: {datetime} (your time)\n\n"
+            "ℹ️ Booked by the client via self-booking link."
+        ),
     },
 
     "ru": {
@@ -1203,6 +1285,88 @@ TEXTS = {
         "btn_tariff_history":  "📜 История платежей",
         "btn_tariff_howto":    "❓ Как это работает?",
         "btn_tariff_back":     "⬅️ Назад",
+
+        # ── Самозапись: настройки психолога ───────────────────────────────
+        "btn_set_booking":           "📅 Запись клиентов",
+        "section_booking":           "📅 Запись клиентов",
+        "booking_pro_only":          "⚠️ Самозапись клиентов доступна только на тарифе Pro.\nВведите промокод: /promo",
+        "booking_no_profile":        "Профиль для записи ещё не настроен.",
+        "btn_booking_setup":         "🛠 Настроить профиль",
+        "ask_booking_display_name":  "👤 Как будет называться ваша страница записи?\n(укажите имя или профессиональный псевдоним):",
+        "ask_booking_bio":           "📝 Напишите краткое описание для клиентов (до 300 символов).\nОно отображается на странице записи:",
+        "booking_bio_too_long":      "⚠️ Описание слишком длинное ({length} симв.). Пожалуйста, уложитесь в 300 символов:",
+        "ask_booking_timezone":      "🕐 Выберите рабочий часовой пояс — слоты будут генерироваться в нём:",
+        "booking_profile_saved":     "✅ Профиль создан! Теперь настройте еженедельное расписание.",
+        "booking_profile_card":      (
+            "📅 *Профиль записи*\n\n"
+            "👤 Имя: {display_name}\n"
+            "📝 Описание: {bio}\n"
+            "🔗 Slug: `{slug}`\n"
+            "🕐 Часовой пояс: {timezone}\n"
+            "Статус: {status}\n\n"
+            "Ссылка для записи:\n`{link}`"
+        ),
+        "booking_enabled_on":        "🟢 Принимаю записи",
+        "booking_enabled_off":       "🔴 Запись приостановлена",
+        "booking_toggled_on":        "✅ Запись включена — клиенты могут записываться.",
+        "booking_toggled_off":       "❌ Запись приостановлена — ссылка показывает «запись недоступна».",
+        "btn_booking_toggle_on":     "▶️ Включить запись",
+        "btn_booking_toggle_off":    "⏸ Приостановить запись",
+        "btn_booking_schedule":      "📋 Расписание",
+        "btn_booking_exceptions":    "🚫 Блокировки дат",
+        "btn_booking_link":          "🔗 Ссылка записи",
+        "btn_booking_edit_name":     "✏️ Изменить имя",
+        "btn_booking_edit_bio":      "✏️ Изменить описание",
+        "btn_booking_edit_tz":       "🕐 Изменить часовой пояс",
+        "booking_link_msg":          "🔗 Ваша ссылка для записи:\n\n`{link}`\n\nПоделитесь ею с клиентами, чтобы они могли записываться.",
+        "booking_schedule_title":    "📋 *Еженедельное расписание*\n\nНажмите на день для настройки:",
+        "booking_day_configured":    "✅ {day}: {start}–{end} ({duration} мин + {buffer} мин перерыв)",
+        "booking_day_none":          "➖ {day}: не настроен",
+        "ask_booking_day_start":     "⏰ *{day}*\nВведите время начала приёма (ЧЧ:ММ, например 10:00):",
+        "ask_booking_day_end":       "Введите время окончания (ЧЧ:ММ, например 18:00):",
+        "ask_booking_day_duration":  "Введите длительность сессии в минутах (например 50):",
+        "ask_booking_day_buffer":    "Введите перерыв между сессиями в минутах (0 — без перерыва):",
+        "booking_day_saved":         "✅ Расписание для {day} сохранено.",
+        "booking_day_removed":       "🗑 Расписание для {day} удалено.",
+        "booking_invalid_time":      "⚠️ Неверный формат. Введите как ЧЧ:ММ (например 10:00):",
+        "booking_invalid_number":    "⚠️ Введите целое число:",
+        "booking_time_order":        "⚠️ Время окончания должно быть позже начала. Введите время окончания заново:",
+        "btn_booking_remove_day":    "🗑 Убрать этот день",
+        "booking_exceptions_title":  "🚫 *Блокировки дат*\n\n{items}",
+        "booking_no_exceptions":     "Блокировок нет.",
+        "booking_exception_row":     "• {date} {time_range}",
+        "booking_exception_whole_day": "(весь день)",
+        "ask_booking_ex_date":       "Введите дату блокировки (ДД.ММ.ГГГГ или ГГГГ-ММ-ДД):",
+        "ask_booking_ex_start":      "Введите время начала блокировки (ЧЧ:ММ) или нажмите «Весь день»:",
+        "ask_booking_ex_end":        "Введите время окончания блокировки (ЧЧ:ММ):",
+        "booking_ex_saved":          "✅ Дата заблокирована: {date}.",
+        "booking_invalid_date":      "⚠️ Неверная дата. Введите как ДД.ММ.ГГГГ или ГГГГ-ММ-ДД:",
+        "btn_booking_add_exception": "➕ Добавить блокировку",
+        "btn_booking_whole_day":     "🚫 Весь день",
+        "btn_booking_del_ex":        "🗑 Удалить",
+
+        # ── Самозапись: клиентская сторона ────────────────────────────────
+        "booking_card_text":         "👤 *{display_name}*\n\n{bio}",
+        "btn_booking_book":          "📅 Записаться",
+        "booking_unavailable":       "⚠️ Специалист временно не принимает записи. Попробуйте позже.",
+        "booking_profile_not_found": "😕 Страница записи не найдена. Ссылка могла устареть.",
+        "ask_client_tz_booking":     "🕐 Укажите ваш часовой пояс — чтобы показать доступные слоты в вашем времени:",
+        "booking_no_slots":          "😕 Свободных слотов на ближайшие 14 дней нет. Загляните позже.",
+        "booking_dates_title":       "📅 Выберите дату:",
+        "booking_slots_title":       "🕐 Слоты на {date} (ваше время):",
+        "booking_confirm_text":      "✅ *Подтверждение записи*\n\n📅 {datetime} (ваше время)\n👤 {name}\n\nЗаписаться?",
+        "btn_booking_confirm":       "✅ Подтвердить",
+        "btn_booking_back_dates":    "⬅️ Другая дата",
+        "btn_booking_back_slots":    "⬅️ Другое время",
+        "booking_success":           "🎉 Запись подтверждена!\n\n📅 *{datetime}* (ваше время)\n👤 {name}\n\nНапомню за 24ч и за 1ч до сессии.",
+        "booking_slot_taken":        "⚠️ Этот слот только что заняли. Выберите другое время.",
+        "booking_error":             "⚠️ Что-то пошло не так. Попробуйте ещё раз.",
+        "booking_psych_notify":      (
+            "📅 *Новая самозапись!*\n\n"
+            "Клиент: {client}\n"
+            "Дата: {datetime} (ваше время)\n\n"
+            "ℹ️ Клиент записался самостоятельно через ссылку самозаписи."
+        ),
     },
 }
 

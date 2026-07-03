@@ -414,8 +414,13 @@ async def main():
     await migrate_db()
 
     me = await bot.get_me()
-    set_bot_username(me.username or "")
-    log.info("Bot started: @%s", me.username)
+    username = me.username or ""
+    set_bot_username(username)
+    from handlers.booking_settings import set_bot_username_booking
+    from handlers.booking import set_bot_username_booking_client
+    set_bot_username_booking(username)
+    set_bot_username_booking_client(username)
+    log.info("Bot started: @%s", username)
 
     await bot.set_my_commands([
         BotCommand(command="start",           description="Главное меню"),

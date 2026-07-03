@@ -39,6 +39,7 @@ from keyboards import (
     MENU_COH_CREATE, MENU_COH_LIST,
     MENU_SUM_CLIENTS, MENU_SUM_COHORTS, MENU_SUM_STATS,
     MENU_SET_LANGUAGE, MENU_SET_TIMEZONE, MENU_SET_NOTIFS, MENU_SET_TARIFF,
+    MENU_SET_BOOKING,
     # keyboard builders
     analytics_section_keyboard,
     cancel_keyboard,
@@ -83,6 +84,13 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
         log.info("Consent gate shown (new user): user_id=%d", uid)
         return
     # consent == "accepted": fall through to normal bot logic
+
+    # BOOKING: self-booking deep-link via public profile slug
+    if command.args and command.args.startswith("book_"):
+        slug = command.args[len("book_"):].strip()
+        from handlers.booking import show_booking_card
+        await show_booking_card(message, slug, state)
+        return
 
     # COHORT: Deep-link via cohort invite token
     if command.args and command.args.startswith("cohort_"):
@@ -634,4 +642,12 @@ async def menu_set_notifs(message: Message):
     # MENU: notification settings (stub)
     lang = await get_user_lang(message.from_user.id)
     await message.answer(t(lang, "notifs_not_implemented"))
+
+
+@router.message(F.text.in_(MENU_SET_BOOKING))
+async def menu_set_booking(message: Message, state: FSMContext):
+    # MENU: booking settings screen
+    lang = await get_user_lang(message.from_user.id)
+    from handlers.booking_settings import _booking_settings_screen
+    await _booking_settings_screen(message, message.from_user.id, lang, edit=False)
 

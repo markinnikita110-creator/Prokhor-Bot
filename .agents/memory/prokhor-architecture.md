@@ -5,8 +5,8 @@ description: Key decisions for the Prokhor aiogram 3.x split-handler button UX, 
 
 ## Project structure
 - `main.py` — entry point; includes all routers, runs reminder_loop (individual + cohort sessions + cohort auto-checkins), calls init_db/migrate_db
-- `handlers/` — router modules: menu, clients, sessions, homework, notes, analytics, checkins, settings, timezone, cohorts, supervision
-- `states/` — FSM state files: client_states, session_states, homework_states, note_states, cohort_states, supervision_states, onboarding_states
+- `handlers/` — router modules: menu, clients, sessions, homework, notes, analytics, checkins, settings, timezone, cohorts, supervision, booking_settings, booking
+- `states/` — FSM state files: client_states, session_states, homework_states, note_states, cohort_states, supervision_states, onboarding_states, booking_states
 - `keyboards.py` — all keyboard builders + MENU_* frozensets for reply-keyboard routing
 - `translations.py` — single TEXTS dict; t(lang, key, **kwargs) helper
 - `database.py` — all DB helpers
