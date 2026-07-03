@@ -415,7 +415,10 @@ async def legal_delete_confirm_cb(callback: CallbackQuery, state: FSMContext):
             )
 
             # ── 5. Tables with user_id (psychologists row last) ───────────────────
-            for tbl in ("user_plans", "user_consents", "psychologists"):
+            # user_plans is intentionally excluded: the subscription tier is
+            # autonomous and must survive account deletion so it can be restored
+            # if the user signs up again.
+            for tbl in ("user_consents", "psychologists"):
                 await db.execute(
                     f"DELETE FROM {tbl} WHERE user_id = ?", (uid,)
                 )
