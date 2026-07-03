@@ -28,6 +28,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
+from aiogram.types import FSInputFile
 
 # ── Конфигурация ────────────────────────────────────────────────────────────
 
@@ -146,14 +147,12 @@ async def _run_backup(bot: Bot) -> None:
         f"💾 Размер: {size_str}"
     )
 
-    # 5. Отправляем файл в канал — дескриптор всегда закрывается
+    # 5. Отправляем файл в канал через FSInputFile (aiogram v3 API)
     sent_ok = False
-    doc = None
     try:
-        doc = open(filename, "rb")
         await bot.send_document(
             chat_id=BACKUP_CHANNEL_ID,
-            document=doc,
+            document=FSInputFile(filename),
             caption=caption,
             parse_mode="Markdown",
         )
@@ -163,9 +162,6 @@ async def _run_backup(bot: Bot) -> None:
         msg = f"❌ BACKUP ERROR (отправка файла): {exc}"
         log.exception("BACKUP: send_document failed")
         await _send_error(bot, msg)
-    finally:
-        if doc is not None:
-            doc.close()
 
     # 6. Удаляем локальную копию (в executor — I/O не блокирует loop)
     await loop.run_in_executor(None, _try_delete, filename)
