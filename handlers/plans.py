@@ -99,7 +99,8 @@ async def promo_got_code(message: Message, state: FSMContext):
 
     expires_at = None
     if duration_days:
-        expires_at = (datetime.now() + timedelta(days=duration_days)).strftime("%Y-%m-%d %H:%M")
+        # Use UTC so expires_at comparisons in notify_expiring_plans stay consistent
+        expires_at = (datetime.utcnow() + timedelta(days=duration_days)).strftime("%Y-%m-%d %H:%M")
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -282,7 +283,8 @@ async def admin_giveplan(message: Message):
     plan_name = parts[2].lower()
     days = int(parts[3]) if len(parts) > 3 else None
     expires_at = (
-        (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M") if days else None
+        # Use UTC — consistent with notify_expiring_plans comparisons
+        (datetime.utcnow() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M") if days else None
     )
 
     async with aiosqlite.connect(DB_PATH) as db:

@@ -593,6 +593,8 @@ TEXTS = {
             "Your current plan: *{plan}*"
         ),
         "tariff_already_pro": "💎 You're already on Pro — enjoy working without limits!",
+        # Reminder sent the day before a paid plan expires (notify_expiring_plans)
+        "plan_expiring_tomorrow": "⏰ Reminder: your {plan} plan expires tomorrow ({date}). Use /promo to renew.",
         "btn_tariff_upgrade":  "💎 Upgrade to PRO",
         "btn_tariff_compare":  "📊 Compare plans",
         "btn_tariff_history":  "📜 Payment history",
@@ -1194,6 +1196,8 @@ TEXTS = {
             "Ваш текущий тариф: *{plan}*"
         ),
         "tariff_already_pro": "💎 Вы уже на тарифе Pro — работайте без ограничений!",
+        # Reminder sent the day before a paid plan expires (notify_expiring_plans)
+        "plan_expiring_tomorrow": "⏰ Напоминание: завтра истекает ваш тариф {plan} ({date}). Введите /promo для продления.",
         "btn_tariff_upgrade":  "💎 Перейти на PRO",
         "btn_tariff_compare":  "📊 Сравнить тарифы",
         "btn_tariff_history":  "📜 История платежей",

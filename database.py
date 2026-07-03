@@ -49,7 +49,18 @@ def format_offset(utc_offset_minutes: int) -> str:
 async def init_db():
     """Create all tables on first run."""
     async with aiosqlite.connect(DB_PATH) as db:
+        # Enable WAL mode for crash-safety on mobile/UserLAnd where the process
+        # can be killed by the OS at any moment without a clean shutdown.
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
         await db.executescript("""
+            -- FSM storage: persists aiogram FSM state/data across process restarts
+            CREATE TABLE IF NOT EXISTS fsm_storage (
+                key   TEXT PRIMARY KEY,
+                state TEXT,
+                data  TEXT NOT NULL DEFAULT '{}'
+            );
+
             CREATE TABLE IF NOT EXISTS psychologists (
                 user_id        INTEGER PRIMARY KEY,
                 username       TEXT,

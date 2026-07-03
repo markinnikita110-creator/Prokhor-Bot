@@ -9,8 +9,11 @@ from datetime import datetime, timedelta
 
 import aiosqlite
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+
+# Fix 1: replace MemoryStorage with persistent SQLite-backed storage so FSM
+# state survives process restarts (critical on mobile/UserLAnd).
+from fsm_storage import SQLiteFSMStorage
 
 from database import (
     DB_PATH, get_client_lang, get_client_timezone, get_user_lang,
@@ -30,7 +33,8 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 bot = Bot(token=os.environ["BOT_TOKEN"])
-dp  = Dispatcher(storage=MemoryStorage())
+# Fix 1: SQLiteFSMStorage persists state to prokhor.db → survives restarts
+dp  = Dispatcher(storage=SQLiteFSMStorage())
 
 
 # ── Helper: build cohort check-in score keyboard ───────────────────────────
@@ -104,10 +108,11 @@ async def generate_recurring_individual_sessions():
 
 # ── Background: reminder loop ──────────────────────────────────────────────
 _last_recurring_gen_date = None  # RECURRING: tracks last date the daily generator ran
+_last_notify_date = None         # Fix 3: tracks last date expiring-plan notifications ran
 
 
 async def reminder_loop():
-    global _last_recurring_gen_date
+    global _last_recurring_gen_date, _last_notify_date
     while True:
         await asyncio.sleep(60)
         try:
@@ -121,6 +126,13 @@ async def reminder_loop():
                     await generate_recurring_individual_sessions()  # RECURRING_IND
                 finally:
                     _last_recurring_gen_date = today
+
+            # ── Fix 3: notify users whose paid plan expires tomorrow ────────
+            if _last_notify_date != today:
+                try:
+                    await notify_expiring_plans()
+                finally:
+                    _last_notify_date = today
 
             # ── Individual session reminders ───────────────────────────────
             async with aiosqlite.connect(DB_PATH) as db:
@@ -146,14 +158,20 @@ async def reminder_loop():
                 p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%H:%M")
                 link_line = t(p_lang, "session_link_line", link=link) if link else ""
 
-                async with aiosqlite.connect(DB_PATH) as db:
-                    if not r24 and timedelta(hours=23) < delta <= timedelta(hours=25):
+                # Fix 2: each send wrapped individually — one blocked/unavailable
+                # user no longer prevents reminders from reaching everyone else.
+                if not r24 and timedelta(hours=23) < delta <= timedelta(hours=25):
+                    try:
                         await bot.send_message(
                             psych_id,
                             t(p_lang, "reminder_psych_24h",
-                              client=client_name, time=p_display) + link_line
+                              client=client_name, time=p_display) + link_line,
                         )
-                        if client_tg:
+                    except Exception as e:
+                        log.warning("reminder 24h psych_id=%d sid=%d: %s", psych_id, sid, e)
+
+                    if client_tg:
+                        try:
                             c_lang = await get_client_lang(client_tg)
                             _, c_offset = await get_client_timezone(client_tg)
                             c_local = utc_to_local(scheduled_at_str, c_offset)
@@ -161,19 +179,30 @@ async def reminder_loop():
                             c_link = t(c_lang, "session_link_line", link=link) if link else ""
                             await bot.send_message(
                                 client_tg,
-                                t(c_lang, "reminder_client_24h", time=c_display) + c_link
+                                t(c_lang, "reminder_client_24h", time=c_display) + c_link,
                             )
+                        except Exception as e:
+                            log.warning("reminder 24h client_tg=%d sid=%d: %s", client_tg, sid, e)
+
+                    # Mark sent regardless of per-recipient failures to avoid
+                    # duplicate spam on subsequent loop ticks.
+                    async with aiosqlite.connect(DB_PATH) as db:
                         await db.execute(
                             "UPDATE sessions SET reminded_24h = 1 WHERE id = ?", (sid,))
                         await db.commit()
 
-                    elif not r1h and timedelta(minutes=50) < delta <= timedelta(minutes=70):
+                elif not r1h and timedelta(minutes=50) < delta <= timedelta(minutes=70):
+                    try:
                         await bot.send_message(
                             psych_id,
                             t(p_lang, "reminder_psych_1h",
-                              client=client_name, time=p_display) + link_line
+                              client=client_name, time=p_display) + link_line,
                         )
-                        if client_tg:
+                    except Exception as e:
+                        log.warning("reminder 1h psych_id=%d sid=%d: %s", psych_id, sid, e)
+
+                    if client_tg:
+                        try:
                             c_lang = await get_client_lang(client_tg)
                             _, c_offset = await get_client_timezone(client_tg)
                             c_local = utc_to_local(scheduled_at_str, c_offset)
@@ -181,8 +210,12 @@ async def reminder_loop():
                             c_link = t(c_lang, "session_link_line", link=link) if link else ""
                             await bot.send_message(
                                 client_tg,
-                                t(c_lang, "reminder_client_1h", time=c_display) + c_link
+                                t(c_lang, "reminder_client_1h", time=c_display) + c_link,
                             )
+                        except Exception as e:
+                            log.warning("reminder 1h client_tg=%d sid=%d: %s", client_tg, sid, e)
+
+                    async with aiosqlite.connect(DB_PATH) as db:
                         await db.execute(
                             "UPDATE sessions SET reminded_1h = 1 WHERE id = ?", (sid,))
                         await db.commit()
@@ -333,6 +366,46 @@ async def reminder_loop():
 
         except Exception as e:
             log.error("Reminder loop error: %s", e)
+
+
+# ── Fix 3+4: notify psychologists whose plan expires tomorrow ─────────────
+async def notify_expiring_plans():
+    """Send a reminder to every user whose paid plan expires tomorrow (UTC).
+
+    Uses datetime.utcnow() throughout — consistent with how reminder_loop
+    handles session scheduling.  expires_at values written before this fix
+    used local server time, but the window is a full calendar day so the
+    notification fires correctly even with a moderate timezone offset.
+    """
+    now = datetime.utcnow()
+    # Window: calendar day starting tomorrow (UTC midnight → midnight+1)
+    window_start = (now + timedelta(days=1)).strftime("%Y-%m-%d 00:00")
+    window_end   = (now + timedelta(days=2)).strftime("%Y-%m-%d 00:00")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT user_id, plan, expires_at FROM user_plans "
+            "WHERE plan != 'start' AND expires_at IS NOT NULL "
+            "AND expires_at >= ? AND expires_at < ?",
+            (window_start, window_end),
+        )
+        rows = await cur.fetchall()
+
+    notified = 0
+    for user_id, plan, expires_at in rows:
+        try:
+            # Fix 4: use t() with the user's own language instead of hardcoded RU
+            lang = await get_user_lang(user_id)
+            await bot.send_message(
+                user_id,
+                t(lang, "plan_expiring_tomorrow", plan=plan, date=expires_at),
+            )
+            notified += 1
+        except Exception as e:
+            log.warning("notify_expiring_plans user_id=%d: %s", user_id, e)
+
+    if notified:
+        log.info("notify_expiring_plans: notified %d user(s)", notified)
 
 
 # ── Startup ────────────────────────────────────────────────────────────────
