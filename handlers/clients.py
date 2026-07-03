@@ -24,9 +24,11 @@ from keyboards import (
     cancel_keyboard,
     checkin_score_keyboard,
     client_card_keyboard,
+    client_card_more_keyboard,
     client_list_keyboard,
     clients_section_keyboard,
     export_format_keyboard,
+    note_type_keyboard,
 )
 from states import AddClientForm, AssignHomeworkFromCardForm, TagForm
 from states.note_states import AddNoteForm, SOAPForm
@@ -338,6 +340,28 @@ async def client_action_cb(callback: CallbackQuery, state: FSMContext, bot: Bot)
                 await db.commit()
         link = f"https://t.me/{BOT_USERNAME}?start={token}"
         await callback.message.answer(t(lang, "invite_link", client=client_name, link=link))
+
+    # ── Note type picker (merged Note button → choose plain or SOAP) ────────
+    elif action == "notepick":
+        try:
+            await callback.message.edit_text(
+                t(lang, "note_type_prompt"),
+                reply_markup=note_type_keyboard(client_id, lang))
+        except Exception:
+            await callback.message.answer(
+                t(lang, "note_type_prompt"),
+                reply_markup=note_type_keyboard(client_id, lang))
+
+    # ── More screen (secondary client card with extended actions) ───────────
+    elif action == "more":
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=client_card_more_keyboard(client_id, bool(is_archived), lang))
+        except Exception:
+            card_text, _, _ = await _client_card(client_id, psych_id, lang)
+            await callback.message.answer(
+                card_text or client_name,
+                reply_markup=client_card_more_keyboard(client_id, bool(is_archived), lang))
 
 
 # ── arc_{page} → archived clients list ────────────────────────────────────

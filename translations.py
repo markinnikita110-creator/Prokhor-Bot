@@ -213,6 +213,8 @@ TEXTS = {
         "btn_archive":       "📦 Archive",
         "btn_unarchive":     "♻️ Restore",
         "btn_invite_link":   "🔗 Invite Link",
+        "btn_card_more":     "⋯ More",
+        "note_type_prompt":  "Choose note type:",
 
         # ── Session card buttons ──────────────────────────────────────────
         "btn_reschedule":    "✏️ Reschedule",
@@ -812,6 +814,8 @@ TEXTS = {
         "btn_archive":       "📦 Архивировать",
         "btn_unarchive":     "♻️ Восстановить",
         "btn_invite_link":   "🔗 Ссылка-приглашение",
+        "btn_card_more":     "⋯ Ещё",
+        "note_type_prompt":  "Выберите тип заметки:",
 
         # ── Кнопки карточки сессии ────────────────────────────────────────
         "btn_reschedule":    "✏️ Перенести",

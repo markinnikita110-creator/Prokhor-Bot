@@ -409,9 +409,10 @@ async def cohort_got_name(message: Message, state: FSMContext):
     lang = await get_user_lang(message.from_user.id)
     await state.update_data(name=message.text.strip())
     await state.set_state(CohortCreateForm.description)
-    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "btn_cohort_skip_desc"), callback_data="cohort_skip_desc")
-    ]])
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_cohort_skip_desc"), callback_data="cohort_skip_desc")],
+        [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
+    ])
     await message.answer(t(lang, "cohort_ask_description"), reply_markup=skip_kb)
 
 
@@ -583,9 +584,10 @@ async def cs_got_datetime(message: Message, state: FSMContext):
     scheduled_at_utc = local_to_utc(raw, p_offset)
     await state.update_data(scheduled_at_utc=scheduled_at_utc, scheduled_at_local=raw)
     await state.set_state(CohortScheduleForm.topic)
-    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="csch_skip_topic")
-    ]])
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="csch_skip_topic")],
+        [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
+    ])
     await message.answer(t(lang, "cs_ask_topic"), reply_markup=skip_kb)
 
 
@@ -595,9 +597,10 @@ async def cs_skip_topic(callback: CallbackQuery, state: FSMContext):
     await state.update_data(topic="")
     await state.set_state(CohortScheduleForm.link)
     await callback.answer()
-    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="csch_skip_link")
-    ]])
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="csch_skip_link")],
+        [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
+    ])
     await callback.message.answer(t(lang, "cs_ask_link"), reply_markup=skip_kb)
 
 
@@ -606,9 +609,10 @@ async def cs_got_topic(message: Message, state: FSMContext):
     lang = await get_user_lang(message.from_user.id)
     await state.update_data(topic=message.text.strip())
     await state.set_state(CohortScheduleForm.link)
-    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="csch_skip_link")
-    ]])
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="csch_skip_link")],
+        [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
+    ])
     await message.answer(t(lang, "cs_ask_link"), reply_markup=skip_kb)
 
 
@@ -828,9 +832,10 @@ async def cr_got_time(message: Message, state: FSMContext):
         return
     await state.update_data(time_local=raw)
     await state.set_state(CohortRecurringScheduleForm.topic)
-    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_topic")
-    ]])
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_topic")],
+        [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
+    ])
     await message.answer(t(lang, "cs_ask_topic"), reply_markup=skip_kb)
 
 
@@ -840,9 +845,10 @@ async def cr_skip_topic(callback: CallbackQuery, state: FSMContext):
     await state.update_data(topic="")
     await state.set_state(CohortRecurringScheduleForm.link)
     await callback.answer()
-    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_link")
-    ]])
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_link")],
+        [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
+    ])
     await callback.message.answer(t(lang, "cs_ask_link"), reply_markup=skip_kb)
 
 
@@ -851,9 +857,10 @@ async def cr_got_topic(message: Message, state: FSMContext):
     lang = await get_user_lang(message.from_user.id)
     await state.update_data(topic=message.text.strip())
     await state.set_state(CohortRecurringScheduleForm.link)
-    skip_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_link")
-    ]])
+    skip_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "cs_skip"), callback_data="crsch_skip_link")],
+        [InlineKeyboardButton(text=t(lang, "btn_cancel"), callback_data="fsm_cancel")],
+    ])
     await message.answer(t(lang, "cs_ask_link"), reply_markup=skip_kb)
 
 

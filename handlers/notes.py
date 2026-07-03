@@ -39,25 +39,28 @@ async def note_got_text(message: Message, state: FSMContext):
 @router.message(SOAPForm.subjective)
 async def soap_subjective(message: Message, state: FSMContext):
     data = await state.get_data()
+    lang = data.get("lang", "en")
     await state.update_data(subjective=message.text)
     await state.set_state(SOAPForm.objective)
-    await message.answer(t(data.get("lang", "en"), "soap_o"))
+    await message.answer(t(lang, "soap_o"), reply_markup=cancel_keyboard(lang))
 
 
 @router.message(SOAPForm.objective)
 async def soap_objective(message: Message, state: FSMContext):
     data = await state.get_data()
+    lang = data.get("lang", "en")
     await state.update_data(objective=message.text)
     await state.set_state(SOAPForm.assessment)
-    await message.answer(t(data.get("lang", "en"), "soap_a"))
+    await message.answer(t(lang, "soap_a"), reply_markup=cancel_keyboard(lang))
 
 
 @router.message(SOAPForm.assessment)
 async def soap_assessment(message: Message, state: FSMContext):
     data = await state.get_data()
+    lang = data.get("lang", "en")
     await state.update_data(assessment=message.text)
     await state.set_state(SOAPForm.plan)
-    await message.answer(t(data.get("lang", "en"), "soap_p"))
+    await message.answer(t(lang, "soap_p"), reply_markup=cancel_keyboard(lang))
 
 
 @router.message(SOAPForm.plan)

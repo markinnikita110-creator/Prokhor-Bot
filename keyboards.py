@@ -87,8 +87,9 @@ def individual_menu_keyboard(lang: str) -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=t(lang, "btn_ind_add_client")),
              KeyboardButton(text=t(lang, "btn_ind_client_list"))],
-            [KeyboardButton(text=t(lang, "btn_ind_new_note")),
-             KeyboardButton(text=t(lang, "btn_ind_reminders"))],
+            [KeyboardButton(text=t(lang, "btn_ind_schedule")),
+             KeyboardButton(text=t(lang, "btn_ind_new_note"))],
+            [KeyboardButton(text=t(lang, "btn_ind_reminders"))],
             [KeyboardButton(text=t(lang, "btn_menu_back"))],
         ],
         resize_keyboard=True,
@@ -213,23 +214,40 @@ def client_list_keyboard(clients: list, page: int, lang: str) -> InlineKeyboardM
 
 
 def client_card_keyboard(client_id: int, is_archived: bool, lang: str) -> InlineKeyboardMarkup:
-    arch_cb   = f"ca_{client_id}_unarc" if is_archived else f"ca_{client_id}_arch"
-    arch_text = t(lang, "btn_unarchive") if is_archived else t(lang, "btn_archive")
+    """Primary client card: 4 main actions + More button."""
     rows = [
-        [InlineKeyboardButton(text=t(lang, "btn_add_note"),    callback_data=f"ca_{client_id}_note"),
-         InlineKeyboardButton(text=t(lang, "btn_soap_note"),   callback_data=f"ca_{client_id}_soap")],
-        [InlineKeyboardButton(text=t(lang, "btn_assign_hw"),   callback_data=f"ca_{client_id}_hw"),
-         InlineKeyboardButton(text=t(lang, "btn_send_ci"),     callback_data=f"ca_{client_id}_ci")],
-        [InlineKeyboardButton(text=t(lang, "btn_client_sessions"), callback_data=f"ics_{client_id}"),
-         InlineKeyboardButton(text=t(lang, "btn_timeline"),        callback_data=f"ca_{client_id}_tl")],
-        [InlineKeyboardButton(text=t(lang, "btn_tags"),        callback_data=f"ca_{client_id}_tag"),
-         InlineKeyboardButton(text=t(lang, "btn_engagement"),  callback_data=f"ca_{client_id}_eng")],
-        [InlineKeyboardButton(text=t(lang, "btn_export"),      callback_data=f"ca_{client_id}_exp"),
-         InlineKeyboardButton(text=arch_text,                  callback_data=arch_cb)],
-        [InlineKeyboardButton(text=t(lang, "btn_invite_link"), callback_data=f"ca_{client_id}_inv")],
+        [InlineKeyboardButton(text=t(lang, "btn_add_note"),        callback_data=f"ca_{client_id}_notepick"),
+         InlineKeyboardButton(text=t(lang, "btn_client_sessions"), callback_data=f"ics_{client_id}")],
+        [InlineKeyboardButton(text=t(lang, "btn_assign_hw"),       callback_data=f"ca_{client_id}_hw"),
+         InlineKeyboardButton(text=t(lang, "btn_send_ci"),         callback_data=f"ca_{client_id}_ci")],
+        [InlineKeyboardButton(text=t(lang, "btn_card_more"),       callback_data=f"ca_{client_id}_more")],
         _nav_row("cl_0", lang),
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def note_type_keyboard(client_id: int, lang: str) -> InlineKeyboardMarkup:
+    """Note type picker: plain note vs SOAP note."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_add_note"),  callback_data=f"ca_{client_id}_note"),
+         InlineKeyboardButton(text=t(lang, "btn_soap_note"), callback_data=f"ca_{client_id}_soap")],
+        [InlineKeyboardButton(text=t(lang, "btn_back_to_card"), callback_data=f"cc_{client_id}")],
+    ])
+
+
+def client_card_more_keyboard(client_id: int, is_archived: bool, lang: str) -> InlineKeyboardMarkup:
+    """Secondary client card screen: extended actions."""
+    arch_cb   = f"ca_{client_id}_unarc" if is_archived else f"ca_{client_id}_arch"
+    arch_text = t(lang, "btn_unarchive") if is_archived else t(lang, "btn_archive")
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_timeline"),    callback_data=f"ca_{client_id}_tl"),
+         InlineKeyboardButton(text=t(lang, "btn_tags"),        callback_data=f"ca_{client_id}_tag")],
+        [InlineKeyboardButton(text=t(lang, "btn_engagement"),  callback_data=f"ca_{client_id}_eng"),
+         InlineKeyboardButton(text=t(lang, "btn_export"),      callback_data=f"ca_{client_id}_exp")],
+        [InlineKeyboardButton(text=arch_text,                  callback_data=arch_cb),
+         InlineKeyboardButton(text=t(lang, "btn_invite_link"), callback_data=f"ca_{client_id}_inv")],
+        [InlineKeyboardButton(text=t(lang, "btn_back_to_card"), callback_data=f"cc_{client_id}")],
+    ])
 
 
 def archived_list_keyboard(clients: list, page: int, lang: str) -> InlineKeyboardMarkup:
