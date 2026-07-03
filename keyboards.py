@@ -57,13 +57,6 @@ MENU_SET_TIMEZONE = _all("btn_set_timezone")
 MENU_SET_NOTIFS   = _all("btn_set_notifs")
 MENU_SET_TARIFF   = _all("btn_set_tariff")
 
-# Legacy button sets (still used by inline "Back" callbacks in other handlers)
-MENU_CLIENTS   = _all("btn_clients")
-MENU_SESSIONS  = _all("btn_sessions")
-MENU_HOMEWORK  = _all("btn_homework")
-MENU_ANALYTICS = _all("btn_analytics")
-MENU_CHECKINS  = _all("btn_checkins")
-MENU_SETTINGS  = _all("btn_settings")
 
 
 # ── MENU: Hierarchical reply keyboards ────────────────────────────────────

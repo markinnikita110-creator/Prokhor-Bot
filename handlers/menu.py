@@ -39,21 +39,17 @@ from keyboards import (
     MENU_COH_CREATE, MENU_COH_LIST,
     MENU_SUM_CLIENTS, MENU_SUM_COHORTS, MENU_SUM_STATS,
     MENU_SET_LANGUAGE, MENU_SET_TIMEZONE, MENU_SET_NOTIFS, MENU_SET_TARIFF,
-    # legacy (still used by inline back-buttons in section keyboards)
-    MENU_ANALYTICS, MENU_CHECKINS, MENU_CLIENTS, MENU_HOMEWORK, MENU_SESSIONS, MENU_SETTINGS,
     # keyboard builders
     analytics_section_keyboard,
     cancel_keyboard,
     checkins_section_keyboard,
     clients_section_keyboard,
     cohorts_menu_keyboard,
-    homework_section_keyboard,
     individual_menu_keyboard,
     lang_keyboard,
     main_menu_keyboard,
     role_select_keyboard,
     sessions_section_keyboard,
-    settings_keyboard,
     settings_menu_keyboard,
     summary_menu_keyboard,
     timezone_keyboard,
@@ -639,46 +635,3 @@ async def menu_set_notifs(message: Message):
     lang = await get_user_lang(message.from_user.id)
     await message.answer(t(lang, "notifs_not_implemented"))
 
-
-# ── Legacy reply-keyboard handlers (kept for backward compat) ──────────────
-
-@router.message(F.text.in_(MENU_CLIENTS))
-async def menu_clients(message: Message):
-    lang = await get_user_lang(message.from_user.id)
-    await message.answer(t(lang, "section_clients"),
-                         reply_markup=clients_section_keyboard(lang))
-
-
-@router.message(F.text.in_(MENU_SESSIONS))
-async def menu_sessions(message: Message):
-    lang = await get_user_lang(message.from_user.id)
-    await message.answer(t(lang, "section_sessions"),
-                         reply_markup=sessions_section_keyboard(lang))
-
-
-@router.message(F.text.in_(MENU_HOMEWORK))
-async def menu_homework(message: Message):
-    lang = await get_user_lang(message.from_user.id)
-    await message.answer(t(lang, "section_homework"),
-                         reply_markup=homework_section_keyboard(lang))
-
-
-@router.message(F.text.in_(MENU_ANALYTICS))
-async def menu_analytics(message: Message):
-    lang = await get_user_lang(message.from_user.id)
-    await message.answer(t(lang, "section_analytics"),
-                         reply_markup=analytics_section_keyboard(lang))
-
-
-@router.message(F.text.in_(MENU_CHECKINS))
-async def menu_checkins(message: Message):
-    lang = await get_user_lang(message.from_user.id)
-    await message.answer(t(lang, "section_checkins"),
-                         reply_markup=checkins_section_keyboard(lang))
-
-
-@router.message(F.text.in_(MENU_SETTINGS))
-async def menu_settings(message: Message):
-    lang = await get_user_lang(message.from_user.id)
-    await message.answer(t(lang, "section_settings"),
-                         reply_markup=settings_keyboard(lang))
