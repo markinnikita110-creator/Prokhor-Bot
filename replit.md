@@ -4,33 +4,25 @@ Telegram assistant for psychologists and coaches — manages clients, sessions, 
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- **Workflow:** `Prokhor Bot` → `python main.py`
+- **Required secret:** `BOT_TOKEN` — Telegram bot token from BotFather
+- Database: SQLite, auto-created at startup via `database.py` (`init_db` + `migrate_db`)
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11, aiogram 3.x, aiosqlite
+- FSM: aiogram MemoryStorage
+- DB: SQLite (file-based, no external service needed)
+- Localization: `translations.py` (EN/RU)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
-
-## Architecture decisions
-
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
+- `main.py` — entry point, bot setup, reminder loop, polling
+- `database.py` — DB path, schema init/migration, helpers
+- `handlers/` — one module per feature (clients, sessions, homework, notes, analytics, etc.)
+- `keyboards.py` — shared inline keyboard builders
+- `translations.py` — all user-facing strings (EN/RU)
+- `documents/` — PDF files served to users (consent, privacy policy, terms)
 
 ## User preferences
 
@@ -38,8 +30,5 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Files containing regex patterns should be written with `WriteFile`, not `Edit`, to avoid backslash truncation.
+- Button UX uses split handlers and FSM injection — see `.agents/memory/prokhor-architecture.md`.
