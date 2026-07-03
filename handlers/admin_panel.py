@@ -777,3 +777,31 @@ async def adm_system(callback: CallbackQuery, state: FSMContext):
         f"📁 Журнальный режим: `{journal_mode}`"
     )
     await _edit_or_answer(callback.message, text, _back_kb(), parse_mode="Markdown")
+
+
+# ── /backup — ручной бэкап (только для владельца) ────────────────────────────
+
+@router.message(Command("backup"))
+async def backup_cmd(message: Message, bot: Bot):
+    """Немедленно создаёт резервную копию БД и отправляет в канал.
+
+    Доступна только владельцу бота (ADMIN_ID). Не регистрируется в setMyCommands.
+    """
+    if not _is_admin(message.from_user.id):
+        return  # тихий игнор — не раскрывать существование команды
+
+    notice = await message.answer("⏳ Создаю резервную копию...")
+
+    try:
+        from backup_service import create_backup_and_send
+        await create_backup_and_send(bot)
+        await notice.edit_text("✅ Бэкап создан и отправлен в канал.")
+    except ImportError:
+        await notice.edit_text(
+            "❌ `apscheduler` не установлен.\n"
+            "Выполните: `pip install apscheduler`",
+            parse_mode="Markdown",
+        )
+    except Exception as exc:
+        log.exception("BACKUP CMD: ошибка при ручном бэкапе")
+        await notice.edit_text(f"❌ Ошибка бэкапа:\n`{exc}`", parse_mode="Markdown")
