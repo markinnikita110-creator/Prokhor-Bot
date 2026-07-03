@@ -29,10 +29,10 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
 from aiogram.types import FSInputFile
+from database import DB_PATH  # единственный источник истины для пути к БД
 
 # ── Конфигурация ────────────────────────────────────────────────────────────
 
-DB_PATH           = "prokhor.db"
 BACKUP_CHANNEL_ID = -1004498789408
 BACKUP_INTERVAL_H = 12
 LAST_BACKUP_FILE  = ".last_backup"

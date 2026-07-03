@@ -25,7 +25,6 @@ from handlers.clients import set_bot_username
 from handlers.cohorts import generate_recurring_cohort_sessions  # RECURRING
 from handlers.legal import ConsentMiddleware
 from translations import t
-from backup_service import start_backup_scheduler
 
 BOT_START_TIME = datetime.utcnow()
 
@@ -447,7 +446,18 @@ async def main():
         dp.include_router(r)
 
     asyncio.create_task(reminder_loop())
-    start_backup_scheduler(bot)
+
+    # Резервное копирование — запускается только если apscheduler установлен.
+    # Если пакет отсутствует, бот продолжает работу и пишет предупреждение.
+    try:
+        from backup_service import start_backup_scheduler
+        start_backup_scheduler(bot)
+    except ImportError:
+        log.warning(
+            "BACKUP: apscheduler не установлен — резервное копирование отключено. "
+            "Выполните: pip install apscheduler"
+        )
+
     await dp.start_polling(bot)
 
 
