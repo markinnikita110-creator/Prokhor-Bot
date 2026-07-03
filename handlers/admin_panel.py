@@ -20,7 +20,7 @@ from aiogram.types import (
 )
 
 from database import DB_PATH, now_str
-from states.admin_states import AdminBroadcastForm, AdminFindForm, AdminGrantPlanForm
+from states.admin_states import AdminBroadcastForm, AdminFindForm, AdminGrantPlanForm, AdminPromoForm
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -62,6 +62,10 @@ def _main_kb() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="📢 Рассылка",            callback_data="adm:broadcast"),
             InlineKeyboardButton(text="⚙️ Система",             callback_data="adm:system"),
+        ],
+        [
+            InlineKeyboardButton(text="🎟 Промокоды",           callback_data="adm:promo"),
+            InlineKeyboardButton(text="💾 Бэкап",               callback_data="adm:backup"),
         ],
     ])
 

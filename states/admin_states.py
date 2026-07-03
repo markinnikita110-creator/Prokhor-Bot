@@ -15,3 +15,11 @@ class AdminFindForm(StatesGroup):
 class AdminBroadcastForm(StatesGroup):
     text = State()
     confirm = State()
+
+
+class AdminPromoForm(StatesGroup):
+    code     = State()
+    plan     = State()
+    days     = State()
+    max_uses = State()
+    confirm  = State()
