@@ -1,9 +1,12 @@
+import logging
 import re as _re
 import secrets
 from datetime import datetime, timedelta, timezone as _tz
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiosqlite
+
+_log = logging.getLogger(__name__)
 
 # ── Timezone: integer offset (minutes) → canonical IANA zone name ─────────
 # Used when a user selects a preset button so we store a proper IANA
@@ -84,6 +87,8 @@ def to_user_tz(
     utc_dt_str: str,
     tz_name: str | None,
     fmt: str = "%d.%m.%Y %H:%M",
+    *,
+    user_id: int | None = None,
 ) -> str:
     """Convert a UTC datetime string (as stored in DB) to the user's local time.
 
@@ -93,8 +98,12 @@ def to_user_tz(
                  via a regex fallback so existing records keep working without
                  a forced data migration.
     fmt        — strftime format; default matches app-wide display standard.
+    user_id    — optional; included in the warning log when conversion fails.
 
     Never raises: on any parse failure returns utc_dt_str unchanged.
+    When timezone cannot be resolved the returned string is suffixed with
+    \" ⚠️ (UTC)\" so the user sees an explicit indication rather than silently
+    wrong local time, and a WARNING is emitted to the log.
     """
     try:
         dt_utc = datetime.strptime(utc_dt_str, "%Y-%m-%d %H:%M").replace(
@@ -109,25 +118,33 @@ def to_user_tz(
     if isinstance(tz_name, int):
         return (dt_utc + timedelta(minutes=tz_name)).strftime(fmt)
 
-    tz = tz_name or _FALLBACK_TZ
+    tz = tz_name or ""
 
     # 1. Proper IANA name ("UTC", "Europe/Moscow", "Asia/Kolkata", …)
-    try:
-        return dt_utc.astimezone(ZoneInfo(tz)).strftime(fmt)
-    except (ZoneInfoNotFoundError, KeyError):
-        pass
+    if tz:
+        try:
+            return dt_utc.astimezone(ZoneInfo(tz)).strftime(fmt)
+        except (ZoneInfoNotFoundError, KeyError):
+            pass
 
-    # 2. Legacy "UTC+3" / "UTC+5:30" strings saved by old preset buttons
-    m = _re.match(r"^UTC([+-])(\d{1,2})(?::(\d{2}))?$", tz)
-    if m:
-        sign = 1 if m.group(1) == "+" else -1
-        hours = int(m.group(2))
-        mins = int(m.group(3) or 0)
-        offset_min = sign * (hours * 60 + mins)
-        return (dt_utc + timedelta(minutes=offset_min)).strftime(fmt)
+        # 2. Legacy "UTC+3" / "UTC+5:30" strings saved by old preset buttons
+        m = _re.match(r"^UTC([+-])(\d{1,2})(?::(\d{2}))?$", tz)
+        if m:
+            sign = 1 if m.group(1) == "+" else -1
+            hours = int(m.group(2))
+            mins = int(m.group(3) or 0)
+            offset_min = sign * (hours * 60 + mins)
+            return (dt_utc + timedelta(minutes=offset_min)).strftime(fmt)
 
-    # 3. Last resort: Moscow time (safe default for Russian-language audience)
-    return dt_utc.astimezone(ZoneInfo(_FALLBACK_TZ)).strftime(fmt)
+    # 3. Timezone missing or unrecognised — show UTC with an explicit warning.
+    #    Do NOT silently guess Moscow time: the user sees the wrong time with no
+    #    indication, which is worse than an honest "this is UTC, please fix it".
+    _log.warning(
+        "to_user_tz: cannot resolve timezone %r (user_id=%s) — displaying UTC. "
+        "User should update their timezone setting.",
+        tz_name, user_id if user_id is not None else "unknown",
+    )
+    return dt_utc.strftime(fmt) + " ⚠️ (UTC)"
 
 
 async def init_db():
