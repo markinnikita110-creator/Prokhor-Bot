@@ -151,7 +151,8 @@ async def init_db():
                 language       TEXT DEFAULT 'en',
                 created_at     TEXT,
                 timezone       TEXT DEFAULT 'UTC',
-                utc_offset     INTEGER DEFAULT 0
+                utc_offset     INTEGER DEFAULT 0,
+                tz_confirmed   INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS clients (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,6 +165,7 @@ async def init_db():
                 is_archived     INTEGER DEFAULT 0,
                 timezone        TEXT DEFAULT 'UTC',
                 utc_offset      INTEGER DEFAULT 0,
+                tz_confirmed    INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(psychologist_id, name)
             );
             CREATE TABLE IF NOT EXISTS notes (
@@ -646,23 +648,54 @@ async def get_client_timezone(telegram_id: int) -> tuple[str, int]:
 
 
 async def set_user_timezone(user_id: int, tz_name: str, utc_offset_minutes: int):
-    """Persist psychologist's timezone."""
+    """Persist psychologist's timezone and mark it as explicitly confirmed."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE psychologists SET timezone = ?, utc_offset = ? WHERE user_id = ?",
+            "UPDATE psychologists SET timezone = ?, utc_offset = ?, tz_confirmed = 1"
+            " WHERE user_id = ?",
             (tz_name, utc_offset_minutes, user_id)
         )
         await db.commit()
 
 
 async def set_client_timezone(telegram_id: int, tz_name: str, utc_offset_minutes: int):
-    """Persist connected client's timezone."""
+    """Persist connected client's timezone and mark it as explicitly confirmed."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE clients SET timezone = ?, utc_offset = ? WHERE telegram_id = ?",
+            "UPDATE clients SET timezone = ?, utc_offset = ?, tz_confirmed = 1"
+            " WHERE telegram_id = ?",
             (tz_name, utc_offset_minutes, telegram_id)
         )
         await db.commit()
+
+
+async def needs_tz_confirm(user_id: int) -> bool:
+    """Return True if the psychologist still uses the default UTC and hasn't confirmed it.
+
+    Triggers the one-time 'please set your timezone' prompt in the main menu.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT timezone, tz_confirmed FROM psychologists WHERE user_id = ?", (user_id,)
+        )
+        row = await cur.fetchone()
+    if not row:
+        return False
+    tz, confirmed = row
+    return (not tz or tz == "UTC") and not confirmed
+
+
+async def needs_tz_confirm_client(telegram_id: int) -> bool:
+    """Return True if the client still uses the default UTC and hasn't confirmed it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT timezone, tz_confirmed FROM clients WHERE telegram_id = ?", (telegram_id,)
+        )
+        row = await cur.fetchone()
+    if not row:
+        return False
+    tz, confirmed = row
+    return (not tz or tz == "UTC") and not confirmed
 
 
 async def get_user_lang(user_id: int) -> str:

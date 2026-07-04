@@ -22,6 +22,8 @@ from database import (
     get_user_lang,
     get_user_roles,
     make_token,
+    needs_tz_confirm,
+    needs_tz_confirm_client,
     now_str,
     reset_client_role,
     set_client_lang,
@@ -182,6 +184,9 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
 
     if client_row and not is_psych:
         lang = await get_client_lang(uid)
+        if await needs_tz_confirm_client(uid):
+            await message.answer(t(lang, "tz_confirm_prompt"),
+                                 reply_markup=timezone_keyboard(lang))
         await message.answer(t(lang, "client_menu"))
         return
 
@@ -192,6 +197,9 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
         log.info("New psychologist onboarding started: user_id=%d", uid)
         return
     lang = await get_user_lang(uid)
+    if await needs_tz_confirm(uid):
+        await message.answer(t(lang, "tz_confirm_prompt"),
+                             reply_markup=timezone_keyboard(lang))
     await message.answer(t(lang, "welcome"), reply_markup=main_menu_keyboard(lang))
     log.info("Psychologist started: user_id=%d", uid)
 
@@ -203,6 +211,9 @@ async def role_psych_cb(callback: CallbackQuery):
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
     await callback.answer()
+    if await needs_tz_confirm(uid):
+        await callback.message.answer(t(lang, "tz_confirm_prompt"),
+                                      reply_markup=timezone_keyboard(lang))
     await callback.message.answer(t(lang, "welcome"), reply_markup=main_menu_keyboard(lang))
     log.info("Switched to psychologist role: user_id=%d", uid)
 
@@ -212,6 +223,9 @@ async def role_client_cb(callback: CallbackQuery):
     uid = callback.from_user.id
     lang = await get_client_lang(uid)
     await callback.answer()
+    if await needs_tz_confirm_client(uid):
+        await callback.message.answer(t(lang, "tz_confirm_prompt"),
+                                      reply_markup=timezone_keyboard(lang))
     await callback.message.answer(t(lang, "client_menu"))
     log.info("Switched to client role: user_id=%d", uid)
 
@@ -410,9 +424,13 @@ async def noop_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data == "m_home")
 async def main_menu_cb(callback: CallbackQuery, state: FSMContext):
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     await state.clear()
     await callback.answer()
+    if await needs_tz_confirm(uid):
+        await callback.message.answer(t(lang, "tz_confirm_prompt"),
+                                      reply_markup=timezone_keyboard(lang))
     await callback.message.answer(t(lang, "welcome"), reply_markup=main_menu_keyboard(lang))
 
 
