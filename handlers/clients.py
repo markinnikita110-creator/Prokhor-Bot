@@ -15,9 +15,11 @@ from database import (
     DB_PATH,
     get_client_lang,
     get_user_lang,
+    get_user_timezone,
     make_token,
     now_str,
     resolve_client,
+    to_user_tz,
 )
 from keyboards import (
     archived_list_keyboard,
@@ -67,7 +69,7 @@ async def _client_card(client_id: int, psych_id: int, lang: str):
             "SELECT score FROM checkins WHERE client_id = ? AND score > 0", (client_id,))
         scores = [r[0] for r in await cur.fetchall()]
 
-        now_dt = datetime.now().strftime("%Y-%m-%d %H:%M")
+        now_dt = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
         cur = await db.execute(
             "SELECT scheduled_at FROM sessions "
             "WHERE psychologist_id = ? AND client_name = ? AND scheduled_at >= ? "
@@ -75,9 +77,16 @@ async def _client_card(client_id: int, psych_id: int, lang: str):
             (psych_id, name, now_dt)
         )
         next_sess = await cur.fetchone()
+        cur = await db.execute(
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        tz_row = await cur.fetchone()
 
+    psych_tz = tz_row[0] if tz_row else None
     avg = f"{sum(scores)/len(scores):.1f}" if scores else "N/A"
-    session_str = next_sess[0] if next_sess else t(lang, "no_next_session")
+    session_str = (
+        to_user_tz(next_sess[0], psych_tz, "%d.%m.%Y %H:%M")
+        if next_sess else t(lang, "no_next_session")
+    )
     text = t(lang, "client_card", name=name, notes=notes,
              checkins=len(scores), avg=avg, session=session_str)
     return text, bool(is_archived), name
@@ -416,6 +425,7 @@ async def archived_client_card(callback: CallbackQuery):
 
 async def _build_timeline(client_id: int, psych_id: int, client_name: str, lang: str) -> str:
     events = []
+    session_utc_times: set[str] = set()  # scheduled_at is stored UTC — needs conversion
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT created_at, text FROM notes WHERE client_id = ?", (client_id,))
@@ -436,12 +446,24 @@ async def _build_timeline(client_id: int, psych_id: int, client_name: str, lang:
             "SELECT scheduled_at FROM sessions WHERE psychologist_id = ? AND client_name = ?",
             (psych_id, client_name))
         for (ts,) in await cur.fetchall():
+            session_utc_times.add(ts)
             events.append((ts, t(lang, "timeline_session")))
+
+        cur = await db.execute(
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        tz_row = await cur.fetchone()
 
     if not events:
         return t(lang, "no_timeline")
+    psych_tz = tz_row[0] if tz_row else None
     events.sort(key=lambda x: x[0])
-    lines = [f"{ts}  {label}" for ts, label in events]
+    lines = []
+    for ts, label in events:
+        # Only session.scheduled_at is stored in UTC; other timestamps (created_at,
+        # checkin.timestamp) come from now_str() which is server-local (UTC on Replit).
+        ts_display = (to_user_tz(ts, psych_tz, "%Y-%m-%d %H:%M")
+                      if ts in session_utc_times else ts)
+        lines.append(f"{ts_display}  {label}")
     return t(lang, "timeline_title", client=client_name) + "\n" + "\n".join(lines)
 
 

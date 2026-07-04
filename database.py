@@ -1,7 +1,41 @@
+import re as _re
 import secrets
 from datetime import datetime, timedelta, timezone as _tz
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiosqlite
+
+# ── Timezone: integer offset (minutes) → canonical IANA zone name ─────────
+# Used when a user selects a preset button so we store a proper IANA
+# identifier rather than a synthetic "UTC+3" string.
+OFFSET_TO_IANA: dict[int, str] = {
+    -600: "Pacific/Honolulu",
+    -540: "America/Anchorage",
+    -480: "America/Los_Angeles",
+    -420: "America/Denver",
+    -360: "America/Chicago",
+    -300: "America/New_York",
+    -240: "America/Halifax",
+    -180: "America/Sao_Paulo",
+    -120: "Atlantic/South_Georgia",
+     -60: "Atlantic/Azores",
+       0: "UTC",
+      60: "Europe/London",
+     120: "Europe/Kaliningrad",
+     180: "Europe/Moscow",
+     240: "Europe/Samara",
+     300: "Asia/Yekaterinburg",
+     330: "Asia/Kolkata",
+     360: "Asia/Omsk",
+     420: "Asia/Krasnoyarsk",
+     480: "Asia/Irkutsk",
+     540: "Asia/Yakutsk",
+     600: "Asia/Vladivostok",
+     660: "Asia/Magadan",
+     720: "Asia/Kamchatka",
+}
+
+_FALLBACK_TZ = "Europe/Moscow"
 
 DB_PATH = "prokhor.db"
 
@@ -44,6 +78,56 @@ def format_offset(utc_offset_minutes: int) -> str:
     if mins:
         return f"UTC{sign}{hours}:{mins:02d}"
     return f"UTC{sign}{hours}"
+
+
+def to_user_tz(
+    utc_dt_str: str,
+    tz_name: str | None,
+    fmt: str = "%d.%m.%Y %H:%M",
+) -> str:
+    """Convert a UTC datetime string (as stored in DB) to the user's local time.
+
+    utc_dt_str — "YYYY-MM-DD HH:MM" in UTC, as stored everywhere in the DB.
+    tz_name    — IANA name ("Europe/Moscow") from psychologists.timezone or
+                 clients.timezone.  Legacy "UTC+3" offset strings are handled
+                 via a regex fallback so existing records keep working without
+                 a forced data migration.
+    fmt        — strftime format; default matches app-wide display standard.
+
+    Never raises: on any parse failure returns utc_dt_str unchanged.
+    """
+    try:
+        dt_utc = datetime.strptime(utc_dt_str, "%Y-%m-%d %H:%M").replace(
+            tzinfo=ZoneInfo("UTC")
+        )
+    except (ValueError, Exception):
+        return utc_dt_str  # unparseable — return as-is
+
+    # Defensive guard: caller accidentally passed an integer offset instead of a
+    # string (e.g. old utc_offset column value). Convert on the fly so the
+    # function never raises TypeError.
+    if isinstance(tz_name, int):
+        return (dt_utc + timedelta(minutes=tz_name)).strftime(fmt)
+
+    tz = tz_name or _FALLBACK_TZ
+
+    # 1. Proper IANA name ("UTC", "Europe/Moscow", "Asia/Kolkata", …)
+    try:
+        return dt_utc.astimezone(ZoneInfo(tz)).strftime(fmt)
+    except (ZoneInfoNotFoundError, KeyError):
+        pass
+
+    # 2. Legacy "UTC+3" / "UTC+5:30" strings saved by old preset buttons
+    m = _re.match(r"^UTC([+-])(\d{1,2})(?::(\d{2}))?$", tz)
+    if m:
+        sign = 1 if m.group(1) == "+" else -1
+        hours = int(m.group(2))
+        mins = int(m.group(3) or 0)
+        offset_min = sign * (hours * 60 + mins)
+        return (dt_utc + timedelta(minutes=offset_min)).strftime(fmt)
+
+    # 3. Last resort: Moscow time (safe default for Russian-language audience)
+    return dt_utc.astimezone(ZoneInfo(_FALLBACK_TZ)).strftime(fmt)
 
 
 async def init_db():

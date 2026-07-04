@@ -42,7 +42,7 @@ async def _dashboard_text(psych_id: int, lang: str) -> str:
 
 
 async def _alerts_text(psych_id: int, lang: str) -> str:
-    now = datetime.now()
+    now = datetime.utcnow()
     cut_ci  = (now - timedelta(days=10)).strftime("%Y-%m-%d %H:%M")
     cut_ses = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M")
     async with aiosqlite.connect(DB_PATH) as db:

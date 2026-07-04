@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from database import (
+    OFFSET_TO_IANA,
     format_offset,
     get_client_lang,
     get_user_lang,
@@ -69,7 +70,7 @@ async def timezone_cmd(message: Message):
 async def tz_set_cb(callback: CallbackQuery):
     uid = callback.from_user.id
     offset_min = int(callback.data.split("_")[2])
-    tz_name = format_offset(offset_min)
+    tz_name = OFFSET_TO_IANA.get(offset_min, format_offset(offset_min))
     is_psych, client_row = await get_user_roles(uid)
     if is_psych:
         await set_user_timezone(uid, tz_name, offset_min)
@@ -78,7 +79,7 @@ async def tz_set_cb(callback: CallbackQuery):
     lang = await get_user_lang(uid) if is_psych else await get_client_lang(uid)
     await callback.answer()
     await callback.message.answer(
-        t(lang, "timezone_saved", tz=tz_name, offset=tz_name)
+        t(lang, "timezone_saved", tz=tz_name, offset=format_offset(offset_min))
     )
     log.info("Timezone set via preset: user_id=%d offset_min=%d", uid, offset_min)
 

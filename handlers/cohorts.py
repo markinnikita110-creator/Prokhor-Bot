@@ -27,6 +27,7 @@ from database import (
     get_user_timezone,
     local_to_utc,
     now_str,
+    to_user_tz,
     utc_to_local,
 )
 from keyboards import (
@@ -964,7 +965,7 @@ async def cohort_sessions_show(callback: CallbackQuery):
     if not sessions:
         await callback.message.answer(t(lang, "no_cs"))
         return
-    _, p_offset = await get_user_timezone(uid)
+    p_tz, _ = await get_user_timezone(uid)
     status_key_map = {
         "scheduled": "cs_status_scheduled",
         "completed": "cs_status_completed",
@@ -972,8 +973,7 @@ async def cohort_sessions_show(callback: CallbackQuery):
     }
     lines = [t(lang, "cs_list_title", cohort=cohort_name)]
     for _sid, num, sched_utc, topic, _link, status in sessions:
-        local_dt = utc_to_local(sched_utc, p_offset)
-        date_display = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        date_display = to_user_tz(sched_utc, p_tz, "%d.%m %H:%M")
         topic_display = topic if topic else t(lang, "cs_no_topic")
         status_display = t(lang, status_key_map.get(status, "cs_status_scheduled"))
         lines.append(t(lang, "cs_row", num=num, date=date_display,
@@ -1010,11 +1010,10 @@ async def catt_got_cohort(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(cohort_id=cohort_id)
     await state.set_state(CohortAttendanceForm.session)
-    _, p_offset = await get_user_timezone(callback.from_user.id)
+    p_tz, _ = await get_user_timezone(callback.from_user.id)
     rows = []
     for sid, num, sched_utc, topic in sessions:
-        local_dt = utc_to_local(sched_utc, p_offset)
-        date_str = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        date_str = to_user_tz(sched_utc, p_tz, "%d.%m %H:%M")
         label = f"#{num} — {date_str}"
         if topic:
             label += f" — {topic[:20]}"
@@ -1261,15 +1260,14 @@ async def _render_session_list(uid: int, cohort_id: int, lang: str):
     if cohort_name is None:
         return None
     sessions = await _get_upcoming_sessions(cohort_id, _SESSIONS_HORIZON_DAYS)
-    _, p_offset = await get_user_timezone(uid)
+    p_tz, _ = await get_user_timezone(uid)
     if not sessions:
         text = t(lang, "cs2_list_empty", cohort=cohort_name, days=_SESSIONS_HORIZON_DAYS)
     else:
         text = t(lang, "cs2_list_title", cohort=cohort_name, days=_SESSIONS_HORIZON_DAYS)
     rows = []
     for sid, num, sched_utc, topic, _link, recurring, _dow in sessions:
-        local_dt = utc_to_local(sched_utc, p_offset)
-        date_display = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        date_display = to_user_tz(sched_utc, p_tz, "%d.%m %H:%M")
         badge = " 🔁" if recurring else ""
         label = f"{date_display} · #{num}{badge}"
         if topic:
@@ -1289,9 +1287,8 @@ async def _render_session_detail(uid: int, session_id: int, lang: str):
     cohort_name = await _verify_cohort_owner(cohort_id, uid)
     if cohort_name is None:
         return None
-    _, p_offset = await get_user_timezone(uid)
-    local_dt = utc_to_local(sched_utc, p_offset)
-    date_display = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    p_tz, _ = await get_user_timezone(uid)
+    date_display = to_user_tz(sched_utc, p_tz, "%d.%m.%Y %H:%M")
 
     lines = [
         t(lang, "cs2_detail_header", num=num, cohort=cohort_name),
@@ -1475,9 +1472,8 @@ async def csdl_ask(callback: CallbackQuery):
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
     _, _cid, num, sched_utc, *_ = row
-    _, p_offset = await get_user_timezone(callback.from_user.id)
-    local_dt = utc_to_local(sched_utc, p_offset)
-    date_display = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    p_tz, _ = await get_user_timezone(callback.from_user.id)
+    date_display = to_user_tz(sched_utc, p_tz, "%d.%m.%Y %H:%M")
     await callback.answer()
     kb = cohort_confirm_keyboard("cs2_delete_yes", "cs2_delete_no",
                                  f"csdy_{session_id}", f"csdn_{session_id}", lang)
@@ -1604,11 +1600,10 @@ async def cv2_attendance(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(cohort_id=cid)
     await state.set_state(CohortAttendanceForm.session)
-    _, p_offset = await get_user_timezone(callback.from_user.id)
+    p_tz, _ = await get_user_timezone(callback.from_user.id)
     rows = []
     for sid, num, sched_utc, topic in sessions:
-        local_dt = utc_to_local(sched_utc, p_offset)
-        date_str = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        date_str = to_user_tz(sched_utc, p_tz, "%d.%m %H:%M")
         label = f"#{num} — {date_str}"
         if topic:
             label += f" — {topic[:20]}"
@@ -1792,7 +1787,7 @@ async def cci_response(callback: CallbackQuery):
 async def cv2_notes(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_notes_"):])
     lang = await get_user_lang(callback.from_user.id)
-    _, p_offset = await get_user_timezone(callback.from_user.id)
+    p_tz, _ = await get_user_timezone(callback.from_user.id)
     sessions = await _get_scheduled_sessions(cid)
     await callback.answer()
     if not sessions:
@@ -1800,8 +1795,7 @@ async def cv2_notes(callback: CallbackQuery):
         return
     rows = []
     for sid, num, sched_utc, topic in sessions:
-        local_dt = utc_to_local(sched_utc, p_offset)
-        date_str = datetime.strptime(local_dt, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
+        date_str = to_user_tz(sched_utc, p_tz, "%d.%m %H:%M")
         label = f"#{num} — {date_str}"
         if topic:
             label += f" — {topic[:20]}"

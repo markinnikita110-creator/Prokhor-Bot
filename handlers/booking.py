@@ -11,8 +11,8 @@ from aiogram.types import (
 )
 
 from database import (
-    DB_PATH, format_offset, get_client_lang, get_user_lang, get_user_timezone,
-    now_str, now_utc, utc_to_local,
+    DB_PATH, OFFSET_TO_IANA, format_offset, get_client_lang, get_user_lang,
+    get_user_timezone, now_str, now_utc, to_user_tz, utc_to_local,
 )
 from keyboards import cancel_keyboard, timezone_keyboard
 from states.booking_states import BookingClientForm
@@ -283,7 +283,7 @@ async def bkc_tz_preset(callback: CallbackQuery, state: FSMContext):
     psych_id = data["psych_id"]
     lang = data.get("lang", "en")
     offset_min = int(callback.data.split("_")[2])
-    tz_name = format_offset(offset_min)
+    tz_name = OFFSET_TO_IANA.get(offset_min, format_offset(offset_min))
     await callback.answer()
     # Save timezone to all client records for this user
     async with aiosqlite.connect(DB_PATH) as db:
@@ -440,9 +440,13 @@ async def bkc_slot_cb(callback: CallbackQuery):
 
     # Decode slot_compact → UTC string
     utc_str = f"{slot_compact[:4]}-{slot_compact[4:6]}-{slot_compact[6:8]} {slot_compact[9:11]}:{slot_compact[11:13]}"
-    utc_dt = datetime.strptime(utc_str, "%Y-%m-%d %H:%M")
-    local_dt = utc_dt + timedelta(minutes=client_offset)
-    display = local_dt.strftime("%d.%m.%Y %H:%M")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT timezone FROM clients WHERE telegram_id = ? LIMIT 1",
+            (callback.from_user.id,))
+        c_tz_row = await cur.fetchone()
+    client_tz = c_tz_row[0] if c_tz_row else None
+    display = to_user_tz(utc_str, client_tz, "%d.%m.%Y %H:%M")
 
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -542,9 +546,12 @@ async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
     await callback.answer()
 
     utc_str = f"{slot_compact[:4]}-{slot_compact[4:6]}-{slot_compact[6:8]} {slot_compact[9:11]}:{slot_compact[11:13]}"
-    utc_dt = datetime.strptime(utc_str, "%Y-%m-%d %H:%M")
-    local_dt = utc_dt + timedelta(minutes=client_offset)
-    display = local_dt.strftime("%d.%m.%Y %H:%M")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT timezone FROM clients WHERE telegram_id = ? LIMIT 1", (uid,))
+        c_tz_row = await cur.fetchone()
+    client_tz = c_tz_row[0] if c_tz_row else None
+    display = to_user_tz(utc_str, client_tz, "%d.%m.%Y %H:%M")
 
     # Rate limit: max 5 requests per client per 24h (across all psychologists)
     cutoff = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M")
@@ -616,9 +623,8 @@ async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
 
     # Notify psychologist with Confirm / Reject buttons
     p_lang = await get_user_lang(psych_id)
-    _, p_offset = await get_user_timezone(psych_id)
-    p_local = utc_to_local(utc_str, p_offset)
-    p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    p_tz, _ = await get_user_timezone(psych_id)
+    p_display = to_user_tz(utc_str, p_tz, "%d.%m.%Y %H:%M")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text=t(p_lang, "btn_booking_approve"),
@@ -662,7 +668,7 @@ async def bkc_approve_cb(callback: CallbackQuery, bot: Bot):
             return
         client_name, utc_str, _ = row
         cur = await db.execute(
-            "SELECT telegram_id, utc_offset FROM clients "
+            "SELECT telegram_id, timezone FROM clients "
             "WHERE psychologist_id = ? AND name = ?",
             (psych_id, client_name))
         client_row = await cur.fetchone()
@@ -672,9 +678,8 @@ async def bkc_approve_cb(callback: CallbackQuery, bot: Bot):
         await db.commit()
 
     # Update psych's notification message (remove buttons)
-    _, p_offset = await get_user_timezone(psych_id)
-    p_local = utc_to_local(utc_str, p_offset)
-    p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    p_tz, _ = await get_user_timezone(psych_id)
+    p_display = to_user_tz(utc_str, p_tz, "%d.%m.%Y %H:%M")
     try:
         await callback.message.edit_text(
             t(p_lang, "booking_psych_approved_notify",
@@ -685,10 +690,9 @@ async def bkc_approve_cb(callback: CallbackQuery, bot: Bot):
 
     # Notify client
     if client_row and client_row[0]:
-        client_tg, client_offset = client_row
+        client_tg, client_tz = client_row
         c_lang = await get_client_lang(client_tg)
-        c_local = utc_to_local(utc_str, client_offset)
-        c_display = datetime.strptime(c_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        c_display = to_user_tz(utc_str, client_tz, "%d.%m.%Y %H:%M")
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute(
                 "SELECT display_name FROM booking_profile WHERE psych_id = ?", (psych_id,))

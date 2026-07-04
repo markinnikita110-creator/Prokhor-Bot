@@ -14,6 +14,7 @@ from aiogram.types import (
 
 from database import (
     DB_PATH,
+    OFFSET_TO_IANA,
     ensure_user,
     find_connected_client,
     format_offset,
@@ -283,16 +284,16 @@ async def onboarding_tz_set(callback: CallbackQuery, state: FSMContext):
     except ValueError:
         await callback.answer()
         return
-    tz_name = format_offset(offset_min)
+    tz_name = OFFSET_TO_IANA.get(offset_min, format_offset(offset_min))
     await set_user_timezone(uid, tz_name, offset_min)
     lang = await get_user_lang(uid)
     await state.clear()
     await callback.answer()
     await callback.message.answer(
-        t(lang, "timezone_saved", tz=tz_name, offset=tz_name) + "\n\n" + t(lang, "welcome"),
+        t(lang, "timezone_saved", tz=tz_name, offset=format_offset(offset_min)) + "\n\n" + t(lang, "welcome"),
         reply_markup=main_menu_keyboard(lang),
     )
-    log.info("Onboarding tz set: user_id=%d offset_min=%d", uid, offset_min)
+    log.info("Onboarding tz set: user_id=%d tz=%s", uid, tz_name)
 
 
 @router.callback_query(OnboardingForm.timezone, F.data == "tz_custom")

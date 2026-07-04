@@ -11,7 +11,7 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
 
-from database import DB_PATH, format_offset, get_user_lang, now_str
+from database import DB_PATH, OFFSET_TO_IANA, format_offset, get_user_lang, now_str
 from keyboards import cancel_keyboard, timezone_keyboard
 from states.booking_states import (
     BookingEditForm, BookingExceptionForm, BookingScheduleForm, BookingSetupForm,
@@ -262,7 +262,7 @@ async def bk_setup_got_bio(message: Message, state: FSMContext):
 @router.callback_query(BookingSetupForm.timezone, F.data.regexp(r"^tz_set_-?\d+$"))
 async def bk_setup_tz_preset(callback: CallbackQuery, state: FSMContext):
     offset_min = int(callback.data.split("_")[2])
-    tz_name = format_offset(offset_min)
+    tz_name = OFFSET_TO_IANA.get(offset_min, format_offset(offset_min))
     data = await state.get_data()
     lang = data.get("lang", "en")
     await state.update_data(tz_name=tz_name)
@@ -441,7 +441,7 @@ async def bk_edit_tz_cb(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(BookingEditForm.timezone, F.data.regexp(r"^tz_set_-?\d+$"))
 async def bk_edit_tz_preset(callback: CallbackQuery, state: FSMContext):
     offset_min = int(callback.data.split("_")[2])
-    tz_name = format_offset(offset_min)
+    tz_name = OFFSET_TO_IANA.get(offset_min, format_offset(offset_min))
     data = await state.get_data()
     lang = data.get("lang", "en")
     psych_id = data["psych_id"]
