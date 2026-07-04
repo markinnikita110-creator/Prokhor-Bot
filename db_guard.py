@@ -44,20 +44,22 @@ DB_SCHEMA: dict = {
     "psychologists": {
         "create": """
             CREATE TABLE IF NOT EXISTS psychologists (
-                user_id    INTEGER PRIMARY KEY,
-                username   TEXT,
-                language   TEXT DEFAULT 'en',
-                created_at TEXT,
-                timezone   TEXT DEFAULT 'UTC',
-                utc_offset INTEGER DEFAULT 0
+                user_id      INTEGER PRIMARY KEY,
+                username     TEXT,
+                language     TEXT DEFAULT 'en',
+                created_at   TEXT,
+                timezone     TEXT DEFAULT 'UTC',
+                utc_offset   INTEGER DEFAULT 0,
+                tz_confirmed INTEGER NOT NULL DEFAULT 0
             )
         """,
         "columns": [
-            ("username",   "TEXT"),
-            ("language",   "TEXT DEFAULT 'en'"),
-            ("created_at", "TEXT"),
-            ("timezone",   "TEXT DEFAULT 'UTC'"),
-            ("utc_offset", "INTEGER DEFAULT 0"),
+            ("username",     "TEXT"),
+            ("language",     "TEXT DEFAULT 'en'"),
+            ("created_at",   "TEXT"),
+            ("timezone",     "TEXT DEFAULT 'UTC'"),
+            ("utc_offset",   "INTEGER DEFAULT 0"),
+            ("tz_confirmed", "INTEGER NOT NULL DEFAULT 0"),
         ],
     },
 
@@ -75,6 +77,7 @@ DB_SCHEMA: dict = {
                 timezone         TEXT DEFAULT 'UTC',
                 utc_offset       INTEGER DEFAULT 0,
                 recurring_paused INTEGER DEFAULT 0,
+                tz_confirmed     INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(psychologist_id, name)
             )
         """,
@@ -89,6 +92,7 @@ DB_SCHEMA: dict = {
             ("timezone",         "TEXT DEFAULT 'UTC'"),
             ("utc_offset",       "INTEGER DEFAULT 0"),
             ("recurring_paused", "INTEGER DEFAULT 0"),
+            ("tz_confirmed",     "INTEGER NOT NULL DEFAULT 0"),
         ],
     },
 

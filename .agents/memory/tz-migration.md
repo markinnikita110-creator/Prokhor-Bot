@@ -34,3 +34,8 @@ Existing DB rows with "UTC+3" format keep working via the regex fallback — no 
 
 ## Known schema-mismatch pitfall
 `psychologists` table columns are `user_id` (not `telegram_id`) and `utc_offset` (not `tz_offset`). A stale query in `main.py`'s recurring-session generator joined on `p.telegram_id`/`p.tz_offset` and silently broke the reminder loop every tick — check `PRAGMA table_info(psychologists)` if you see "no such column" errors mentioning psychologist fields.
+
+## db_guard.py must mirror database.py's inline schema exactly
+`database.py` has an inline `CREATE TABLE` block (used by `init_db`) and `db_guard.py` has a separate `DB_SCHEMA` dict (used by the self-healing guard that actually runs at startup). They can drift: `tz_confirmed` existed in `database.py`'s schema and in every query (`needs_tz_confirm`, `set_user_timezone`) but was missing from `db_guard.py`'s `psychologists`/`clients` column specs, so the live DB never got the column — every `needs_tz_confirm()` call raised "no such column: tz_confirmed", silently breaking the post-onboarding timezone prompt.
+**Why:** db_guard.py is what actually runs before `asyncio.run(main())` (see db-guard.md); database.py's inline CREATE TABLE is effectively dead code once db_guard has already created the table.
+**How to apply:** whenever adding a new column referenced in queries, add it to BOTH database.py's inline schema AND db_guard.py's `DB_SCHEMA["<table>"]["columns"]` list — grep both files for the table name before assuming a column exists.
