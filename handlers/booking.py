@@ -336,10 +336,10 @@ async def _show_booking_dates(target, psych_id: int, lang: str, client_offset: i
             "WHERE psych_id = ? AND type = 'blocked'", (psych_id,))
         exceptions = await cur.fetchall()
         cur = await db.execute(
-            "SELECT timezone FROM booking_profile WHERE psych_id = ?", (psych_id,))
-        profile_row = await cur.fetchone()
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        psych_row = await cur.fetchone()
 
-    psych_tz_name = profile_row[0] if profile_row else "UTC"
+    psych_tz_name = psych_row[0] if psych_row and psych_row[0] else "UTC"
     psych_offset = await get_psych_tz_offset(psych_tz_name)
     booked_utc = await get_booked_slots(psych_id)
 
@@ -391,10 +391,10 @@ async def bkc_date_cb(callback: CallbackQuery):
             "WHERE psych_id = ? AND type = 'blocked'", (psych_id,))
         exceptions = await cur.fetchall()
         cur = await db.execute(
-            "SELECT timezone FROM booking_profile WHERE psych_id = ?", (psych_id,))
-        profile_row = await cur.fetchone()
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        psych_row = await cur.fetchone()
 
-    psych_tz_name = profile_row[0] if profile_row else "UTC"
+    psych_tz_name = psych_row[0] if psych_row and psych_row[0] else "UTC"
     psych_offset = await get_psych_tz_offset(psych_tz_name)
     booked_utc = await get_booked_slots(psych_id)
     slots_utc = compute_available_slots(rules, exceptions, booked_utc, psych_offset)
@@ -495,10 +495,10 @@ async def bkc_slot_back_cb(callback: CallbackQuery):
             "WHERE psych_id = ? AND type = 'blocked'", (psych_id,))
         exceptions = await cur.fetchall()
         cur = await db.execute(
-            "SELECT timezone FROM booking_profile WHERE psych_id = ?", (psych_id,))
-        profile_row = await cur.fetchone()
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        psych_row = await cur.fetchone()
 
-    psych_tz_name = profile_row[0] if profile_row else "UTC"
+    psych_tz_name = psych_row[0] if psych_row and psych_row[0] else "UTC"
     psych_offset = await get_psych_tz_offset(psych_tz_name)
     booked_utc = await get_booked_slots(psych_id)
     slots_utc = compute_available_slots(rules, exceptions, booked_utc, psych_offset)
