@@ -13,7 +13,7 @@ from aiogram.types import (
     Message,
 )
 
-from database import DB_PATH, get_user_lang, now_str
+from database import DB_PATH, get_user_lang, get_user_timezone, now_str, to_user_tz
 from keyboards import cancel_keyboard
 from states.supervision_states import SupervisionCaseForm
 from translations import t
@@ -137,9 +137,10 @@ async def sup_logbook(message: Message):
         await message.answer(t(lang, "sup_logbook_empty"))
         return
 
+    tz_name, _ = await get_user_timezone(uid)
     lines = [t(lang, "sup_logbook_title", count=len(cases))]
     for case_id, alias, status, created_at in cases:
-        date_str = created_at[:10] if created_at else "?"
+        date_str = to_user_tz(created_at, tz_name, "%d.%m.%Y") if created_at else "?"
         lines.append(t(lang, "sup_logbook_row", id=case_id, alias=alias,
                        status=status, date=date_str))
     await message.answer("\n".join(lines))

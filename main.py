@@ -66,9 +66,9 @@ async def generate_recurring_individual_sessions():
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT s.id, s.psychologist_id, s.client_name, s.days_of_week, "
-            "s.scheduled_at, s.topic, s.link, p.tz_offset "
+            "s.scheduled_at, s.topic, s.link, p.utc_offset "
             "FROM sessions s "
-            "JOIN psychologists p ON p.telegram_id = s.psychologist_id "
+            "JOIN psychologists p ON p.user_id = s.psychologist_id "
             "JOIN clients c ON c.psychologist_id = s.psychologist_id "
             "  AND c.name = s.client_name "
             "WHERE s.recurring = 1 AND c.is_archived = 0 AND c.recurring_paused = 0"

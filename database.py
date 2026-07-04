@@ -48,8 +48,12 @@ def _make_token() -> str:
 
 
 def now_str() -> str:
-    """Current LOCAL time string — used only for display-only created_at fields."""
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
+    """Current UTC time string — used for display-only created_at/timestamp fields.
+
+    Always UTC so the whole system has one internal clock; convert with
+    `to_user_tz()` whenever a value is shown to a psychologist or client.
+    """
+    return datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M")
 
 
 def now_utc() -> str:

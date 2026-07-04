@@ -2,9 +2,8 @@
 
 import re
 from datetime import datetime
+from datetime import timezone as _dt_tz
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-import pytz
 
 from database import OFFSET_TO_IANA
 from translations import t
@@ -52,15 +51,15 @@ def parse_timezone(arg: str) -> tuple[str, int] | None:
     if arg.upper() == "UTC":
         return ("UTC", 0)
 
-    # Named IANA timezone — validate with ZoneInfo first, then compute offset via pytz
+    # Named IANA timezone — validate with ZoneInfo, then compute the current
+    # offset via a UTC-aware "now" (independent of the server's own system tz).
     try:
-        ZoneInfo(arg)  # raises ZoneInfoNotFoundError if invalid
-        tz = pytz.timezone(arg)
-        aware_dt = tz.localize(datetime.now())
-        offset_td = aware_dt.utcoffset()
+        zone = ZoneInfo(arg)  # raises ZoneInfoNotFoundError if invalid
+        now_utc = datetime.now(_dt_tz.utc)
+        offset_td = now_utc.astimezone(zone).utcoffset()
         offset_mins = int(offset_td.total_seconds() // 60)
         return (arg, offset_mins)
-    except (ZoneInfoNotFoundError, pytz.UnknownTimeZoneError, Exception):
+    except (ZoneInfoNotFoundError, Exception):
         pass
 
     return None

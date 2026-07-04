@@ -13,8 +13,10 @@ from database import (
     find_connected_client,
     get_client_lang,
     get_user_lang,
+    get_user_timezone,
     now_str,
     resolve_client,
+    to_user_tz,
 )
 from keyboards import (
     cancel_keyboard,
@@ -150,7 +152,11 @@ async def ci_recent(callback: CallbackQuery):
     if not rows:
         text = t(lang, "no_recent_checkins")
     else:
-        lines = [f"• {name}: {score}/10  ({ts})" for name, score, ts in rows]
+        tz_name, _ = await get_user_timezone(callback.from_user.id)
+        lines = [
+            f"• {name}: {score}/10  ({to_user_tz(ts, tz_name)})"
+            for name, score, ts in rows
+        ]
         text = t(lang, "recent_checkins_title") + "\n" + "\n".join(lines)
     try:
         await callback.message.edit_text(text, reply_markup=checkins_section_keyboard(lang))
@@ -231,7 +237,8 @@ async def checkins_cmd(message: Message):
     if not rows:
         await message.answer(t(lang, "no_checkins", client=name))
         return
-    lines = [f"- {sc}/10  ({ts})" for sc, ts in rows]
+    tz_name, _ = await get_user_timezone(message.from_user.id)
+    lines = [f"- {sc}/10  ({to_user_tz(ts, tz_name)})" for sc, ts in rows]
     await message.answer(t(lang, "checkins_title", client=name) + "\n" + "\n".join(lines))
 
 

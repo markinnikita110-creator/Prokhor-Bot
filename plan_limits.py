@@ -1,7 +1,7 @@
 """Tariff plans, limits, and helper functions for the Prokhor bot."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiosqlite
 
@@ -73,7 +73,7 @@ async def get_user_plan(user_id: int, bot=None) -> dict:
             except ValueError:
                 exp_dt = datetime.strptime(expires_at, "%Y-%m-%d")
 
-            if exp_dt < datetime.now():
+            if exp_dt < datetime.now(timezone.utc).replace(tzinfo=None):
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute(
                         "UPDATE user_plans SET plan = 'start', expires_at = NULL WHERE user_id = ?",

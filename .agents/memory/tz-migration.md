@@ -26,3 +26,11 @@ When notifying clients about reschedules/cancellations, always query `timezone` 
 ## Backward compat
 Existing DB rows with "UTC+3" format keep working via the regex fallback — no migration needed.
 `get_user_timezone()` returns `(tz_name_str, offset_int)` tuple; callers should destructure as `tz_name, _ = await get_user_timezone(uid)` for display, `_, offset = ...` for storage.
+
+## now_str() is UTC, not server-local
+`now_str()` in `database.py` now explicitly returns `datetime.now(timezone.utc)` (not naive `datetime.now()`).
+**Why:** it feeds `created_at`/`timestamp` columns (notes, checkins, supervision_cases, etc.) that get compared/displayed alongside genuinely-UTC scheduling columns; a naive local call is a footgun if the process ever runs on a non-UTC host.
+**How to apply:** any new "recorded at" timestamp should use `now_str()` or `datetime.now(timezone.utc)` directly — never bare `datetime.now()`. When displaying these fields to a user, wrap with `to_user_tz(value, tz_name)` (get `tz_name` via `get_user_timezone(uid)`), same as scheduling fields.
+
+## Known schema-mismatch pitfall
+`psychologists` table columns are `user_id` (not `telegram_id`) and `utc_offset` (not `tz_offset`). A stale query in `main.py`'s recurring-session generator joined on `p.telegram_id`/`p.tz_offset` and silently broke the reminder loop every tick — check `PRAGMA table_info(psychologists)` if you see "no such column" errors mentioning psychologist fields.

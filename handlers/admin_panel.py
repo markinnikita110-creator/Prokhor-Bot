@@ -542,7 +542,7 @@ async def adm_find_got_query(message: Message, state: FSMContext):
         f"👤 *Пользователь*\n\n"
         f"ID: `{uid}`\n"
         f"@username: {('@' + uname) if uname else '—'}\n"
-        f"Зарегистрирован: {created_at or '—'}\n"
+        f"Зарегистрирован: {created_at + ' UTC' if created_at else '—'}\n"
         f"Тариф: *{plan.upper()}* (до {exp_str})\n"
         f"Клиентов: {client_count}"
     )
