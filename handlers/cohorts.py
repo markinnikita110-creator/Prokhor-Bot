@@ -991,7 +991,12 @@ async def _render_members_text(cid: int, lang: str) -> str:
 async def cv2_members(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     cid = int(callback.data[len("cv2_mem_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted cv2_members on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     text = await _render_members_text(cid, lang)
     kb = cohort_members_keyboard(cid, lang)
     await callback.answer()
@@ -1008,7 +1013,12 @@ async def cv2_members(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cv2_addmem_"))
 async def cv2_addmem_start(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_addmem_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted addmem on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     await state.set_state(CohortAddMemberManualForm.name)
     await state.update_data(cohort_id=cid)
     await callback.answer()
@@ -1049,7 +1059,12 @@ async def cv2_addmem_got_name(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cv2_invite_"))
 async def cv2_invite(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_invite_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted invite on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     token, cohort_name = await get_cohort_invite_token(cid)
     await callback.answer()
     if not token:
@@ -1074,7 +1089,12 @@ async def cv2_invite(callback: CallbackQuery):
 async def cv2_schedule(callback: CallbackQuery, state: FSMContext):
     """SESSIONS: session number is auto-assigned here too — straight to date/time."""
     cid = int(callback.data[len("cv2_sched_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted schedule on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     existing = await _get_cohort_sessions(cid)
     next_num = max((row[1] for row in existing), default=0) + 1
     await state.update_data(cohort_id=cid, session_number=next_num)
@@ -1429,7 +1449,12 @@ async def csrn_cancel(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cv2_att_"))
 async def cv2_attendance(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_att_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted attendance on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     sessions = await _get_scheduled_sessions(cid)
     await callback.answer()
     if not sessions:
@@ -1457,8 +1482,13 @@ async def cv2_attendance(callback: CallbackQuery, state: FSMContext):
 async def cv2_checkins_menu(callback: CallbackQuery):
     # COHORT_V2: only handle cv2_ci_{number} — other cv2_ci* prefixes are distinct
     cid = int(callback.data[len("cv2_ci_"):])
-    lang = await get_user_lang(callback.from_user.id)
-    cohort_name = await get_cohort_name(cid)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    cohort_name = await verify_cohort_owner(cid, uid)
+    if cohort_name is None:
+        log.warning("SECURITY: user_id=%d attempted ci_menu on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     await callback.answer()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "cv2_checkin_btn_setup"),
@@ -1480,7 +1510,12 @@ async def cv2_checkins_menu(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cv2_cistp_"))
 async def cv2_checkin_setup_start(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_cistp_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted cistp on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     await state.update_data(cohort_id=cid)
     await state.set_state(CohortCheckinSetupForm.question)
     await callback.answer()
@@ -1527,8 +1562,13 @@ async def cv2_ci_got_interval(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cv2_cisum_"))
 async def cv2_checkin_summary(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_cisum_"):])
-    lang = await get_user_lang(callback.from_user.id)
-    cohort_name = await get_cohort_name(cid)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    cohort_name = await verify_cohort_owner(cid, uid)
+    if cohort_name is None:
+        log.warning("SECURITY: user_id=%d attempted cisum on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT cm.telegram_id, cm.name, COUNT(cc.id), "
@@ -1556,7 +1596,12 @@ async def cv2_checkin_summary(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cv2_cisnd_"))
 async def cv2_checkin_send_now(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_cisnd_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted cisnd on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT question FROM cohort_checkin_configs WHERE cohort_id = ?", (cid,)
@@ -1623,8 +1668,13 @@ async def cci_response(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cv2_notes_"))
 async def cv2_notes(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_notes_"):])
-    lang = await get_user_lang(callback.from_user.id)
-    p_tz, _ = await get_user_timezone(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted notes on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
+    p_tz, _ = await get_user_timezone(uid)
     sessions = await _get_scheduled_sessions(cid)
     await callback.answer()
     if not sessions:
@@ -1790,7 +1840,12 @@ async def cv2_soap_p(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cv2_bc_"))
 async def cv2_broadcast_start(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_bc_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted broadcast on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     members = await get_active_members(cid)
     if not members:
         await callback.answer(t(lang, "cv2_broadcast_no_members"), show_alert=True)
@@ -1858,8 +1913,13 @@ async def cv2_broadcast_cancel_cb(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cv2_stats_"))
 async def cv2_stats(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_stats_"):])
-    lang = await get_user_lang(callback.from_user.id)
-    cohort_name = await get_cohort_name(cid)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    cohort_name = await verify_cohort_owner(cid, uid)
+    if cohort_name is None:
+        log.warning("SECURITY: user_id=%d attempted stats on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     member_count = await get_member_count(cid)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -1905,9 +1965,11 @@ async def cv2_stats(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cv2_arch_"))
 async def cv2_archive_confirm(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_arch_"):])
-    lang = await get_user_lang(callback.from_user.id)
-    row = await get_cohort_status(cid)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    row = await get_cohort_for_owner(cid, uid)
     if not row:
+        log.warning("SECURITY: user_id=%d attempted archive_confirm on cohort_id=%d (not owner)", uid, cid)
         await callback.answer()
         return
     cohort_name, status = row
@@ -1928,9 +1990,14 @@ async def cv2_archive_confirm(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cv2_arcy_"))
 async def cv2_archive_do(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_arcy_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    cohort_name = await verify_cohort_owner(cid, uid)
+    if cohort_name is None:
+        log.warning("SECURITY: user_id=%d attempted archive_do on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     await archive_cohort(cid)
-    cohort_name = await get_cohort_name(cid)
     await callback.answer()
     await callback.message.answer(t(lang, "cv2_archived_ok", cohort=cohort_name))
     log.info("COHORT_V2: cohort_id=%d archived by user_id=%d", cid, callback.from_user.id)
