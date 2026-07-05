@@ -27,7 +27,7 @@ from core.db.clients_repository import (
 from db_guard import ensure_db_schema
 from handlers import routers
 from handlers.clients import set_bot_username
-from handlers.cohorts import generate_recurring_cohort_sessions  # RECURRING
+from core.db.cohort_sessions_repository import generate_recurring_cohort_sessions  # RECURRING
 from handlers.legal import ConsentMiddleware
 from translations import t
 

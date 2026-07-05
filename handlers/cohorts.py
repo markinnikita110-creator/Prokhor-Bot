@@ -55,6 +55,23 @@ from states.cohort_states import (
 from translations import t
 
 from handlers.clients import BOT_USERNAME  # COHORT: bot username for invite links
+from core.db.cohorts_repository import verify_cohort_owner
+from core.db.cohort_sessions_repository import (
+    create_cohort_session,
+    delete_cohort_session,
+    delete_recurring_rule,
+    generate_recurring_cohort_sessions,
+    get_active_members,
+    get_cohort_for_session,
+    get_cohort_name,
+    get_cohort_sessions,
+    get_scheduled_sessions,
+    get_session,
+    get_upcoming_sessions,
+    seed_attendance_for_session,
+    update_session_field,
+)
+from core.services.cohort_sessions import finalize_recurring_schedule, finalize_schedule
 
 # RECURRING: display names for weekday indices (0=Mon..6=Sun), keyed to translations.py
 _DOW_KEYS = ["dow_mon", "dow_tue", "dow_wed", "dow_thu", "dow_fri", "dow_sat", "dow_sun"]
@@ -136,68 +153,6 @@ async def _get_cohorts_for_psych(psychologist_id: int) -> list:
 # COHORT_SESSION: DB helpers
 # ══════════════════════════════════════════════════════════════════════════
 
-async def _create_cohort_session(cohort_id, session_number, scheduled_at_utc, topic, link,
-                                  recurring=0, days_of_week=""):
-    """COHORT_SESSION / RECURRING: create a session. `recurring`/`days_of_week`
-    default to off, so this stays fully backward compatible with one-off sessions."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "INSERT INTO cohort_sessions "
-            "(cohort_id, session_number, scheduled_at, topic, link, status, recurring, days_of_week) "
-            "VALUES (?, ?, ?, ?, ?, 'scheduled', ?, ?)",
-            (cohort_id, session_number, scheduled_at_utc, topic, link, recurring, days_of_week),
-        )
-        session_id = cur.lastrowid
-        await db.commit()
-    return session_id
-
-
-async def _seed_attendance_for_session(cohort_id: int, session_id: int):
-    """RECURRING: create pending attendance rows for all active members of a
-    cohort right when a session (one-off or auto-generated) is created."""
-    members = await _get_active_members(cohort_id)
-    if not members:
-        return
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.executemany(
-            "INSERT OR IGNORE INTO cohort_attendance (session_id, member_id, status) "
-            "VALUES (?, ?, 'pending')",
-            [(session_id, member_id) for member_id, _tg, _name in members],
-        )
-        await db.commit()
-
-
-async def _get_cohort_sessions(cohort_id: int) -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, session_number, scheduled_at, topic, link, status "
-            "FROM cohort_sessions WHERE cohort_id = ? ORDER BY scheduled_at ASC",
-            (cohort_id,),
-        )
-        return await cur.fetchall()
-
-
-async def _get_scheduled_sessions(cohort_id: int) -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, session_number, scheduled_at, topic "
-            "FROM cohort_sessions "
-            "WHERE cohort_id = ? AND status IN ('scheduled', 'completed') "
-            "ORDER BY scheduled_at ASC",
-            (cohort_id,),
-        )
-        return await cur.fetchall()
-
-
-async def _get_active_members(cohort_id: int) -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, telegram_id, name FROM cohort_members "
-            "WHERE cohort_id = ? AND status = 'active' ORDER BY name",
-            (cohort_id,),
-        )
-        return await cur.fetchall()
-
 
 async def _upsert_attendance(session_id: int, member_id: int, status: str):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -219,23 +174,6 @@ async def _get_attendance_for_session(session_id: int) -> dict:
     return {row[0]: row[1] for row in rows}
 
 
-async def _get_cohort_for_session(session_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT cs.cohort_id, c.name, cs.session_number "
-            "FROM cohort_sessions cs JOIN cohorts c ON c.id = cs.cohort_id "
-            "WHERE cs.id = ?",
-            (session_id,),
-        )
-        return await cur.fetchone()
-
-
-async def _get_cohort_name(cohort_id: int) -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT name FROM cohorts WHERE id = ?", (cohort_id,))
-        row = await cur.fetchone()
-    return row[0] if row else str(cohort_id)
-
 
 async def _get_cohort_invite_token(cohort_id: int) -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -254,58 +192,6 @@ async def _get_next_manual_id(cohort_id: int) -> int:
     return min(min_id, 0) - 1
 
 
-async def _verify_cohort_owner(cohort_id: int, uid: int) -> str | None:
-    """SESSIONS: returns the cohort name if `uid` is its owning psychologist, else None."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT name FROM cohorts WHERE id = ? AND psychologist_id = ?", (cohort_id, uid),
-        )
-        row = await cur.fetchone()
-    return row[0] if row else None
-
-
-async def _get_upcoming_sessions(cohort_id: int, days_ahead: int = 45) -> list:
-    """SESSIONS: scheduled sessions for a cohort within the next `days_ahead` days."""
-    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-    horizon_utc = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%d %H:%M")
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, session_number, scheduled_at, topic, link, recurring, days_of_week "
-            "FROM cohort_sessions "
-            "WHERE cohort_id = ? AND status = 'scheduled' "
-            "AND scheduled_at >= ? AND scheduled_at <= ? "
-            "ORDER BY scheduled_at ASC",
-            (cohort_id, now_utc, horizon_utc),
-        )
-        return await cur.fetchall()
-
-
-async def _get_session(session_id: int):
-    """SESSIONS: full row for one session, or None if it no longer exists."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, cohort_id, session_number, scheduled_at, topic, link, status, "
-            "recurring, days_of_week FROM cohort_sessions WHERE id = ?",
-            (session_id,),
-        )
-        return await cur.fetchone()
-
-
-async def _update_session_field(session_id: int, field: str, value: str):
-    """SESSIONS: update one editable column (scheduled_at/topic/link) of a session."""
-    if field not in ("scheduled_at", "topic", "link"):
-        raise ValueError(f"field not editable: {field}")
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(f"UPDATE cohort_sessions SET {field} = ? WHERE id = ?", (value, session_id))
-        await db.commit()
-
-
-async def _delete_cohort_session(session_id: int):
-    """SESSIONS: remove a session and its attendance rows."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM cohort_attendance WHERE session_id = ?", (session_id,))
-        await db.execute("DELETE FROM cohort_sessions WHERE id = ?", (session_id,))
-        await db.commit()
 
 
 async def _is_recurring_paused(cohort_id: int) -> bool:
@@ -323,26 +209,13 @@ async def _set_recurring_paused(cohort_id: int, paused: bool):
         await db.commit()
 
 
-async def _delete_recurring_rule(cohort_id: int):
-    """SESSIONS / RECURRING: forget the schedule for a cohort. Already-created
-    sessions are kept as-is (just no longer flagged as part of a live rule),
-    and the generator will find no more `recurring=1` template to work from."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE cohort_sessions SET recurring = 0, days_of_week = '' "
-            "WHERE cohort_id = ? AND recurring = 1",
-            (cohort_id,),
-        )
-        await db.execute("UPDATE cohorts SET recurring_paused = 0 WHERE id = ?", (cohort_id,))
-        await db.commit()
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # COHORT_SESSION: Attendance keyboard builder
 # ══════════════════════════════════════════════════════════════════════════
 
 async def _attendance_kb(session_id: int, cohort_id: int, lang: str):
-    members = await _get_active_members(cohort_id)
+    members = await get_active_members(cohort_id)
     if not members:
         return t(lang, "cs_att_no_members"), None
     attendance = await _get_attendance_for_session(session_id)
@@ -562,7 +435,7 @@ async def cs_got_cohort(callback: CallbackQuery, state: FSMContext):
     entry required, straight to picking the date/time."""
     lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("csch_coh_"):])
-    existing = await _get_cohort_sessions(cohort_id)
+    existing = await get_cohort_sessions(cohort_id)
     next_num = max((row[1] for row in existing), default=0) + 1
     await state.update_data(cohort_id=cohort_id, session_number=next_num)
     await state.set_state(CohortScheduleForm.datetime_)
@@ -619,135 +492,15 @@ async def cs_got_topic(message: Message, state: FSMContext):
 @router.callback_query(CohortScheduleForm.link, F.data == "csch_skip_link")
 async def cs_skip_link(callback: CallbackQuery, state: FSMContext):
     await state.update_data(link="")
-    await _finalize_schedule(callback, state)
+    await finalize_schedule(callback, state)
 
 
 @router.message(CohortScheduleForm.link)
 async def cs_got_link(message: Message, state: FSMContext):
     await state.update_data(link=message.text.strip())
-    await _finalize_schedule(message, state)
+    await finalize_schedule(message, state)
 
 
-async def _finalize_schedule(source, state: FSMContext):
-    uid = source.from_user.id
-    lang = await get_user_lang(uid)
-    data = await state.get_data()
-    cohort_id = data["cohort_id"]
-    # Re-verify ownership at mutation point
-    if await _verify_cohort_owner(cohort_id, uid) is None:
-        log.warning("SECURITY: _finalize_schedule owner mismatch cohort_id=%d uid=%d", cohort_id, uid)
-        await state.clear()
-        return
-    session_number = data["session_number"]
-    scheduled_at_utc = data["scheduled_at_utc"]
-    scheduled_at_local = data["scheduled_at_local"]
-    topic = data.get("topic", "")
-    link = data.get("link", "")
-    session_id = await _create_cohort_session(cohort_id, session_number, scheduled_at_utc, topic, link)
-    cohort_name = await _get_cohort_name(cohort_id)
-    topic_display = topic if topic else t(lang, "cs_no_topic")
-    date_display = datetime.strptime(scheduled_at_local, "%Y-%m-%d %H:%M").strftime("%d.%m %H:%M")
-    await state.clear()
-    reply = t(lang, "cs_created", num=session_number, cohort=cohort_name,
-              date=date_display, topic=topic_display)
-    if isinstance(source, CallbackQuery):
-        await source.answer()
-        await source.message.answer(reply)
-    else:
-        await source.answer(reply)
-    log.info("COHORT_SESSION: created session_id=%d cohort_id=%d num=%d by user_id=%d",
-             session_id, cohort_id, session_number, uid)
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# RECURRING: generator — creates upcoming occurrences for the next 30 days
-# ══════════════════════════════════════════════════════════════════════════
-
-async def generate_recurring_cohort_sessions(cohort_id: int = None) -> int:
-    """RECURRING: for every cohort with a recurring session schedule, create
-    missing occurrences on the matching weekdays for the next 30 days.
-
-    Called once/day from `reminder_loop()` in main.py, and once immediately
-    after a psychologist sets up a new recurring schedule (via `cohort_id=`)
-    so the horizon is filled in right away instead of waiting for the next
-    daily tick.
-
-    For each cohort the most recently created recurring session (highest id)
-    acts as the template: its time-of-day, topic, link and days_of_week are
-    reused for every generated occurrence. Dates that already have a session
-    are skipped, so this is safe to call repeatedly (idempotent).
-    """
-    today = datetime.utcnow().date()
-    horizon = today + timedelta(days=30)
-
-    query = (
-        "SELECT cs.cohort_id, MAX(cs.id) "
-        "FROM cohort_sessions cs JOIN cohorts c ON c.id = cs.cohort_id "
-        "WHERE cs.recurring = 1 AND c.status != 'archived' "
-        "AND COALESCE(c.recurring_paused, 0) = 0 "
-    )
-    params: tuple = ()
-    if cohort_id is not None:
-        query += "AND cs.cohort_id = ? "
-        params = (cohort_id,)
-    query += "GROUP BY cs.cohort_id"
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(query, params)
-        rule_rows = await cur.fetchall()
-
-    total_created = 0
-    for c_id, last_id in rule_rows:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "SELECT session_number, scheduled_at, topic, link, days_of_week "
-                "FROM cohort_sessions WHERE id = ?",
-                (last_id,),
-            )
-            row = await cur.fetchone()
-        if not row:
-            continue
-        last_num, sched_str, topic, link, days_csv = row
-        if not days_csv:
-            continue
-        try:
-            days = {int(d) for d in days_csv.split(",") if d.strip() != ""}
-        except ValueError:
-            continue
-        if not days:
-            continue
-        try:
-            time_part = datetime.strptime(sched_str, "%Y-%m-%d %H:%M").strftime("%H:%M")
-        except ValueError:
-            continue
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "SELECT scheduled_at FROM cohort_sessions WHERE cohort_id = ?",
-                (c_id,),
-            )
-            existing_dates = {r[0].split(" ")[0] for r in await cur.fetchall()}
-
-        next_num = last_num
-        day_cursor = today
-        while day_cursor <= horizon:
-            if day_cursor.weekday() in days:
-                date_str = day_cursor.strftime("%Y-%m-%d")
-                if date_str not in existing_dates:
-                    next_num += 1
-                    scheduled_at = f"{date_str} {time_part}"
-                    new_session_id = await _create_cohort_session(
-                        c_id, next_num, scheduled_at, topic, link,
-                        recurring=1, days_of_week=days_csv,
-                    )
-                    await _seed_attendance_for_session(c_id, new_session_id)
-                    existing_dates.add(date_str)
-                    total_created += 1
-            day_cursor += timedelta(days=1)
-
-    if total_created:
-        log.info("RECURRING: generator created %d session(s)", total_created)
-    return total_created
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -872,71 +625,14 @@ async def cr_got_topic(message: Message, state: FSMContext):
 @router.callback_query(CohortRecurringScheduleForm.link, F.data == "crsch_skip_link")
 async def cr_skip_link(callback: CallbackQuery, state: FSMContext):
     await state.update_data(link="")
-    await _finalize_recurring_schedule(callback, state)
+    await finalize_recurring_schedule(callback, state)
 
 
 @router.message(CohortRecurringScheduleForm.link)
 async def cr_got_link(message: Message, state: FSMContext):
     await state.update_data(link=message.text.strip())
-    await _finalize_recurring_schedule(message, state)
+    await finalize_recurring_schedule(message, state)
 
-
-async def _finalize_recurring_schedule(source, state: FSMContext):
-    """RECURRING: create the first occurrence as the recurring template, then
-    immediately backfill the rest of the 30-day horizon for this cohort."""
-    uid = source.from_user.id
-    lang = await get_user_lang(uid)
-    data = await state.get_data()
-    cohort_id = data["cohort_id"]
-    # Re-verify ownership at mutation point
-    if await _verify_cohort_owner(cohort_id, uid) is None:
-        log.warning("SECURITY: _finalize_recurring_schedule owner mismatch cohort_id=%d uid=%d",
-                    cohort_id, uid)
-        await state.clear()
-        return
-    days = sorted(data["days"])
-    days_csv = ",".join(str(d) for d in days)
-    time_local = data["time_local"]
-    topic = data.get("topic", "")
-    link = data.get("link", "")
-
-    existing = await _get_cohort_sessions(cohort_id)
-    next_num = max((row[1] for row in existing), default=0) + 1
-
-    # Find the soonest date (today or later) matching one of the picked weekdays.
-    # NOTE: uses UTC "today" as the base day — close enough for scheduling purposes,
-    # and consistent with how the daily generator advances through the horizon.
-    today = datetime.utcnow().date()
-    first_date = today
-    for _ in range(7):
-        if first_date.weekday() in days:
-            break
-        first_date += timedelta(days=1)
-
-    _, p_offset = await get_user_timezone(uid)
-    local_dt_str = f"{first_date.strftime('%Y-%m-%d')} {time_local}"
-    scheduled_at_utc = local_to_utc(local_dt_str, p_offset)
-
-    session_id = await _create_cohort_session(
-        cohort_id, next_num, scheduled_at_utc, topic, link,
-        recurring=1, days_of_week=days_csv,
-    )
-    await _seed_attendance_for_session(cohort_id, session_id)
-
-    # Backfill the remaining occurrences in the 30-day horizon right away.
-    await generate_recurring_cohort_sessions(cohort_id=cohort_id)
-
-    cohort_name = await _get_cohort_name(cohort_id)
-    days_display = ", ".join(t(lang, _DOW_KEYS[d]) for d in days)
-    await state.clear()
-    reply = t(lang, "cs_recurring_created", cohort=cohort_name, days=days_display, time=time_local)
-    if isinstance(source, CallbackQuery):
-        await source.answer()
-        await source.message.answer(reply)
-    else:
-        await source.answer(reply)
-    log.info("RECURRING: created template session_id=%d cohort_id=%d days=%s by user_id=%d",
-             session_id, cohort_id, days_csv, uid)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -970,7 +666,7 @@ async def cohort_sessions_show(callback: CallbackQuery):
         await callback.answer()
         return
     cohort_name = row[0]
-    sessions = await _get_cohort_sessions(cohort_id)
+    sessions = await get_cohort_sessions(cohort_id)
     await callback.answer()
     if not sessions:
         await callback.message.answer(t(lang, "no_cs"))
@@ -1012,7 +708,7 @@ async def cohort_attendance_start(message: Message, state: FSMContext):
 async def catt_got_cohort(callback: CallbackQuery, state: FSMContext):
     lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("catt_coh_"):])
-    sessions = await _get_scheduled_sessions(cohort_id)
+    sessions = await get_scheduled_sessions(cohort_id)
     await callback.answer()
     if not sessions:
         await state.clear()
@@ -1036,7 +732,7 @@ async def catt_got_cohort(callback: CallbackQuery, state: FSMContext):
 async def catt_got_session(callback: CallbackQuery, state: FSMContext):
     lang = await get_user_lang(callback.from_user.id)
     session_id = int(callback.data[len("catt_ses_"):])
-    row = await _get_cohort_for_session(session_id)
+    row = await get_cohort_for_session(session_id)
     if not row:
         await callback.answer()
         await state.clear()
@@ -1067,12 +763,12 @@ async def catt_mark(callback: CallbackQuery):
         await callback.answer()
         return
     # Verify ownership BEFORE mutating attendance
-    row = await _get_cohort_for_session(session_id)
+    row = await get_cohort_for_session(session_id)
     if not row:
         await callback.answer()
         return
     cohort_id, cohort_name, session_num = row
-    if await _verify_cohort_owner(cohort_id, uid) is None:
+    if await verify_cohort_owner(cohort_id, uid) is None:
         log.warning("SECURITY: catt_mark owner mismatch session_id=%d uid=%d", session_id, uid)
         await callback.answer()
         return
@@ -1144,8 +840,8 @@ async def cv2_pick_cohort(callback: CallbackQuery):
 
 async def _render_members_text(cid: int, lang: str) -> str:
     """Build the formatted members list text."""
-    cohort_name = await _get_cohort_name(cid)
-    members = await _get_active_members(cid)
+    cohort_name = await get_cohort_name(cid)
+    members = await get_active_members(cid)
     if not members:
         return (t(lang, "cv2_no_members") + "\n\n"
                 + t(lang, "cv2_members_empty_note"))
@@ -1164,7 +860,7 @@ async def cv2_members(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_mem_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_members owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
@@ -1186,7 +882,7 @@ async def cv2_addmem_start(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_addmem_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_addmem_start owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
@@ -1206,7 +902,7 @@ async def cv2_addmem_got_name(message: Message, state: FSMContext):
     data = await state.get_data()
     cid = data["cohort_id"]
     # Re-verify ownership at mutation point — FSM state can be spoofed
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_addmem_got_name owner mismatch cid=%d uid=%d", cid, uid)
         await state.clear()
         return
@@ -1246,7 +942,7 @@ async def cv2_invite(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_invite_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_invite owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
@@ -1276,11 +972,11 @@ async def cv2_schedule(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_sched_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_schedule owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
-    existing = await _get_cohort_sessions(cid)
+    existing = await get_cohort_sessions(cid)
     next_num = max((row[1] for row in existing), default=0) + 1
     await state.update_data(cohort_id=cid, session_number=next_num)
     await state.set_state(CohortScheduleForm.datetime_)
@@ -1298,10 +994,10 @@ _SESSIONS_HORIZON_DAYS = 45
 async def _render_session_list(uid: int, cohort_id: int, lang: str):
     """SESSIONS: builds (text, keyboard) for the session list, or None if the
     caller doesn't own this cohort."""
-    cohort_name = await _verify_cohort_owner(cohort_id, uid)
+    cohort_name = await verify_cohort_owner(cohort_id, uid)
     if cohort_name is None:
         return None
-    sessions = await _get_upcoming_sessions(cohort_id, _SESSIONS_HORIZON_DAYS)
+    sessions = await get_upcoming_sessions(cohort_id, _SESSIONS_HORIZON_DAYS)
     p_tz, _ = await get_user_timezone(uid)
     if not sessions:
         text = t(lang, "cs2_list_empty", cohort=cohort_name, days=_SESSIONS_HORIZON_DAYS)
@@ -1322,11 +1018,11 @@ async def _render_session_list(uid: int, cohort_id: int, lang: str):
 async def _render_session_detail(uid: int, session_id: int, lang: str):
     """SESSIONS: builds (text, keyboard) for one session's detail/action view,
     or None if the session is gone or doesn't belong to this psychologist."""
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         return None
     sid, cohort_id, num, sched_utc, topic, link, _status, recurring, days_csv = row
-    cohort_name = await _verify_cohort_owner(cohort_id, uid)
+    cohort_name = await verify_cohort_owner(cohort_id, uid)
     if cohort_name is None:
         return None
     p_tz, _ = await get_user_timezone(uid)
@@ -1392,11 +1088,11 @@ async def csd_session_detail(callback: CallbackQuery):
 async def csdt_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("csdt_"):])
     lang = await get_user_lang(callback.from_user.id)
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
-    if await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+    if await verify_cohort_owner(row[1], callback.from_user.id) is None:
         log.warning("SECURITY: csdt_start owner mismatch session_id=%d uid=%d",
                     session_id, callback.from_user.id)
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
@@ -1421,13 +1117,13 @@ async def csdt_got_value(message: Message, state: FSMContext):
     session_id = data["session_id"]
     cohort_id = data.get("cohort_id")
     # Re-verify ownership at mutation point
-    if cohort_id and await _verify_cohort_owner(cohort_id, uid) is None:
+    if cohort_id and await verify_cohort_owner(cohort_id, uid) is None:
         log.warning("SECURITY: csdt_got_value owner mismatch session_id=%d uid=%d", session_id, uid)
         await state.clear()
         return
     _, p_offset = await get_user_timezone(uid)
     scheduled_at_utc = local_to_utc(raw, p_offset)
-    await _update_session_field(session_id, "scheduled_at", scheduled_at_utc)
+    await update_session_field(session_id, "scheduled_at", scheduled_at_utc)
     await state.clear()
     await message.answer(t(lang, "cs2_updated_dt"))
     result = await _render_session_detail(message.from_user.id, session_id, lang)
@@ -1443,11 +1139,11 @@ async def csdt_got_value(message: Message, state: FSMContext):
 async def cstp_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("cstp_"):])
     lang = await get_user_lang(callback.from_user.id)
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
-    if await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+    if await verify_cohort_owner(row[1], callback.from_user.id) is None:
         log.warning("SECURITY: cstp_start owner mismatch session_id=%d uid=%d",
                     session_id, callback.from_user.id)
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
@@ -1475,11 +1171,11 @@ async def cstp_got_value(message: Message, state: FSMContext):
 async def cslk_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("cslk_"):])
     lang = await get_user_lang(callback.from_user.id)
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
-    if await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+    if await verify_cohort_owner(row[1], callback.from_user.id) is None:
         log.warning("SECURITY: cslk_start owner mismatch session_id=%d uid=%d",
                     session_id, callback.from_user.id)
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
@@ -1510,12 +1206,12 @@ async def _finish_field_edit(source, state: FSMContext, field: str, value: str, 
     session_id = data["session_id"]
     cohort_id = data.get("cohort_id")
     # Re-verify ownership at mutation point
-    if cohort_id and await _verify_cohort_owner(cohort_id, uid) is None:
+    if cohort_id and await verify_cohort_owner(cohort_id, uid) is None:
         log.warning("SECURITY: _finish_field_edit owner mismatch session_id=%d uid=%d",
                     session_id, uid)
         await state.clear()
         return
-    await _update_session_field(session_id, field, value)
+    await update_session_field(session_id, field, value)
     await state.clear()
     reply = t(lang, ok_key)
     result = await _render_session_detail(uid, session_id, lang)
@@ -1538,11 +1234,11 @@ async def _finish_field_edit(source, state: FSMContext, field: str, value: str, 
 async def csdl_ask(callback: CallbackQuery):
     session_id = int(callback.data[len("csdl_"):])
     lang = await get_user_lang(callback.from_user.id)
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
-    if await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+    if await verify_cohort_owner(row[1], callback.from_user.id) is None:
         log.warning("SECURITY: csdl_ask owner mismatch session_id=%d uid=%d",
                     session_id, callback.from_user.id)
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
@@ -1560,17 +1256,17 @@ async def csdl_ask(callback: CallbackQuery):
 async def csdy_confirm(callback: CallbackQuery):
     session_id = int(callback.data[len("csdy_"):])
     lang = await get_user_lang(callback.from_user.id)
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
-    if await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+    if await verify_cohort_owner(row[1], callback.from_user.id) is None:
         log.warning("SECURITY: csdy_confirm owner mismatch session_id=%d uid=%d",
                     session_id, callback.from_user.id)
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
     _, cohort_id, num, *_ = row
-    await _delete_cohort_session(session_id)
+    await delete_cohort_session(session_id)
     await callback.answer(t(lang, "cs2_deleted_ok", num=num))
     result = await _render_session_list(callback.from_user.id, cohort_id, lang)
     if result:
@@ -1596,17 +1292,17 @@ async def csdn_cancel(callback: CallbackQuery):
 async def cspz_toggle(callback: CallbackQuery):
     session_id = int(callback.data[len("cspz_"):])
     lang = await get_user_lang(callback.from_user.id)
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
-    if await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+    if await verify_cohort_owner(row[1], callback.from_user.id) is None:
         log.warning("SECURITY: cspz_toggle owner mismatch session_id=%d uid=%d",
                     session_id, callback.from_user.id)
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
     cohort_id = row[1]
-    cohort_name = await _get_cohort_name(cohort_id)
+    cohort_name = await get_cohort_name(cohort_id)
     currently_paused = await _is_recurring_paused(cohort_id)
     await _set_recurring_paused(cohort_id, not currently_paused)
     feedback = t(lang, "cs2_resumed_ok" if currently_paused else "cs2_paused_ok", cohort=cohort_name)
@@ -1628,17 +1324,17 @@ async def cspz_toggle(callback: CallbackQuery):
 async def csrl_ask(callback: CallbackQuery):
     session_id = int(callback.data[len("csrl_"):])
     lang = await get_user_lang(callback.from_user.id)
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
-    if await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+    if await verify_cohort_owner(row[1], callback.from_user.id) is None:
         log.warning("SECURITY: csrl_ask owner mismatch session_id=%d uid=%d",
                     session_id, callback.from_user.id)
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
     cohort_id = row[1]
-    cohort_name = await _get_cohort_name(cohort_id)
+    cohort_name = await get_cohort_name(cohort_id)
     await callback.answer()
     kb = cohort_confirm_keyboard("cs2_delrule_yes", "cs2_delrule_no",
                                  f"csry_{session_id}", f"csrn_{session_id}", lang)
@@ -1649,18 +1345,18 @@ async def csrl_ask(callback: CallbackQuery):
 async def csry_confirm(callback: CallbackQuery):
     session_id = int(callback.data[len("csry_"):])
     lang = await get_user_lang(callback.from_user.id)
-    row = await _get_session(session_id)
+    row = await get_session(session_id)
     if not row:
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
-    if await _verify_cohort_owner(row[1], callback.from_user.id) is None:
+    if await verify_cohort_owner(row[1], callback.from_user.id) is None:
         log.warning("SECURITY: csry_confirm owner mismatch session_id=%d uid=%d",
                     session_id, callback.from_user.id)
         await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
         return
     cohort_id = row[1]
-    cohort_name = await _get_cohort_name(cohort_id)
-    await _delete_recurring_rule(cohort_id)
+    cohort_name = await get_cohort_name(cohort_id)
+    await delete_recurring_rule(cohort_id)
     await callback.answer(t(lang, "cs2_delrule_ok", cohort=cohort_name), show_alert=True)
     result = await _render_session_detail(callback.from_user.id, session_id, lang)
     if result:
@@ -1690,11 +1386,11 @@ async def cv2_attendance(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_att_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_attendance owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
-    sessions = await _get_scheduled_sessions(cid)
+    sessions = await get_scheduled_sessions(cid)
     await callback.answer()
     if not sessions:
         await callback.message.answer(t(lang, "cs_att_no_sessions"))
@@ -1723,11 +1419,11 @@ async def cv2_checkins_menu(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_ci_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_checkins_menu owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
-    cohort_name = await _get_cohort_name(cid)
+    cohort_name = await get_cohort_name(cid)
     await callback.answer()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "cv2_checkin_btn_setup"),
@@ -1751,7 +1447,7 @@ async def cv2_checkin_setup_start(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_cistp_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_checkin_setup_start owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
@@ -1785,7 +1481,7 @@ async def cv2_ci_got_interval(message: Message, state: FSMContext):
     question = data["question"]
     uid = message.from_user.id
     # Re-verify ownership at mutation point
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_ci_got_interval owner mismatch cid=%d uid=%d", cid, uid)
         await state.clear()
         return
@@ -1809,11 +1505,11 @@ async def cv2_checkin_summary(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_cisum_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_checkin_summary owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
-    cohort_name = await _get_cohort_name(cid)
+    cohort_name = await get_cohort_name(cid)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT cm.telegram_id, cm.name, COUNT(cc.id), "
@@ -1843,7 +1539,7 @@ async def cv2_checkin_send_now(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_cisnd_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_checkin_send_now owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
@@ -1856,7 +1552,7 @@ async def cv2_checkin_send_now(callback: CallbackQuery):
         await callback.answer(t(lang, "cv2_checkin_ask_question"), show_alert=True)
         return
     question = cfg[0]
-    members = await _get_active_members(cid)
+    members = await get_active_members(cid)
     if not members:
         await callback.answer(t(lang, "cv2_broadcast_no_members"), show_alert=True)
         return
@@ -1922,12 +1618,12 @@ async def cv2_notes(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_notes_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_notes owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
     p_tz, _ = await get_user_timezone(uid)
-    sessions = await _get_scheduled_sessions(cid)
+    sessions = await get_scheduled_sessions(cid)
     await callback.answer()
     if not sessions:
         await callback.message.answer(t(lang, "cs_att_no_sessions"))
@@ -1948,12 +1644,12 @@ async def cv2_notes_session(callback: CallbackQuery):
     session_id = int(callback.data[len("cv2_nses_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    row = await _get_cohort_for_session(session_id)
+    row = await get_cohort_for_session(session_id)
     if not row:
         await callback.answer()
         return
     cohort_id, _, session_num = row
-    if await _verify_cohort_owner(cohort_id, uid) is None:
+    if await verify_cohort_owner(cohort_id, uid) is None:
         log.warning("SECURITY: cv2_notes_session owner mismatch session_id=%d uid=%d",
                     session_id, uid)
         await callback.answer()
@@ -1991,12 +1687,12 @@ async def cv2_note_add_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("cv2_nadd_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    row = await _get_cohort_for_session(session_id)
+    row = await get_cohort_for_session(session_id)
     if not row:
         await callback.answer()
         return
     cohort_id, _, session_num = row
-    if await _verify_cohort_owner(cohort_id, uid) is None:
+    if await verify_cohort_owner(cohort_id, uid) is None:
         log.warning("SECURITY: cv2_note_add_start owner mismatch session_id=%d uid=%d",
                     session_id, uid)
         await callback.answer()
@@ -2017,11 +1713,11 @@ async def cv2_note_text_got(message: Message, state: FSMContext):
     note_type = data.get("note_type", "general")
     text = message.text.strip()
     # Re-verify ownership at mutation point
-    row = await _get_cohort_for_session(session_id)
+    row = await get_cohort_for_session(session_id)
     if not row:
         await state.clear()
         return
-    if await _verify_cohort_owner(row[0], uid) is None:
+    if await verify_cohort_owner(row[0], uid) is None:
         log.warning("SECURITY: cv2_note_text_got owner mismatch session_id=%d uid=%d",
                     session_id, uid)
         await state.clear()
@@ -2035,7 +1731,7 @@ async def cv2_note_text_got(message: Message, state: FSMContext):
             (session_id, message.from_user.id, note_type, text, now_str()),
         )
         await db.commit()
-    row = await _get_cohort_for_session(session_id)
+    row = await get_cohort_for_session(session_id)
     session_num = row[2] if row else "?"
     if note_type == "soap":
         await message.answer(t(lang, "cv2_soap_saved", num=session_num))
@@ -2052,12 +1748,12 @@ async def cv2_soap_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("cv2_nsoap_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    row = await _get_cohort_for_session(session_id)
+    row = await get_cohort_for_session(session_id)
     if not row:
         await callback.answer()
         return
     cohort_id, _, session_num = row
-    if await _verify_cohort_owner(cohort_id, uid) is None:
+    if await verify_cohort_owner(cohort_id, uid) is None:
         log.warning("SECURITY: cv2_soap_start owner mismatch session_id=%d uid=%d",
                     session_id, uid)
         await callback.answer()
@@ -2101,11 +1797,11 @@ async def cv2_soap_p(message: Message, state: FSMContext):
     session_id = data["session_id"]
     session_num = data.get("session_num", "?")
     # Re-verify ownership at mutation point
-    row = await _get_cohort_for_session(session_id)
+    row = await get_cohort_for_session(session_id)
     if not row:
         await state.clear()
         return
-    if await _verify_cohort_owner(row[0], uid) is None:
+    if await verify_cohort_owner(row[0], uid) is None:
         log.warning("SECURITY: cv2_soap_p owner mismatch session_id=%d uid=%d", session_id, uid)
         await state.clear()
         return
@@ -2138,15 +1834,15 @@ async def cv2_broadcast_start(callback: CallbackQuery, state: FSMContext):
     cid = int(callback.data[len("cv2_bc_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_broadcast_start owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
-    members = await _get_active_members(cid)
+    members = await get_active_members(cid)
     if not members:
         await callback.answer(t(lang, "cv2_broadcast_no_members"), show_alert=True)
         return
-    cohort_name = await _get_cohort_name(cid)
+    cohort_name = await get_cohort_name(cid)
     await state.update_data(cohort_id=cid, cohort_name=cohort_name, member_count=len(members))
     await state.set_state(CohortBroadcastForm.message)
     await callback.answer()
@@ -2180,7 +1876,7 @@ async def cv2_broadcast_send(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     cid = data["cohort_id"]
     text = data["broadcast_text"]
-    members = await _get_active_members(cid)
+    members = await get_active_members(cid)
     await state.clear()
     await callback.answer()
     sent = 0
@@ -2211,11 +1907,11 @@ async def cv2_stats(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_stats_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_stats owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
-    cohort_name = await _get_cohort_name(cid)
+    cohort_name = await get_cohort_name(cid)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT COUNT(*) FROM cohort_members WHERE cohort_id = ? AND status = 'active'", (cid,)
@@ -2295,14 +1991,14 @@ async def cv2_archive_do(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_arcy_"):])
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    if await _verify_cohort_owner(cid, uid) is None:
+    if await verify_cohort_owner(cid, uid) is None:
         log.warning("SECURITY: cv2_archive_do owner mismatch cid=%d uid=%d", cid, uid)
         await callback.answer()
         return
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE cohorts SET status = 'archived' WHERE id = ?", (cid,))
         await db.commit()
-    cohort_name = await _get_cohort_name(cid)
+    cohort_name = await get_cohort_name(cid)
     await callback.answer()
     await callback.message.answer(t(lang, "cv2_archived_ok", cohort=cohort_name))
     log.info("COHORT_V2: cohort_id=%d archived by user_id=%d", cid, callback.from_user.id)
