@@ -554,7 +554,7 @@ async def cr_toggle_day(callback: CallbackQuery, state: FSMContext):
 
     if payload == "done":
         data = await state.get_data()
-        days = data.get("days", set())
+        days = data.get("days", [])
         if not days:
             await callback.answer(t(lang, "cs_recurring_days_empty"), show_alert=True)
             return
