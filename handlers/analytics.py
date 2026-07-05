@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from database import DB_PATH, get_user_lang
 from core.db.clients_repository import resolve_client
+from core.services.notes import count_notes
 from keyboards import analytics_section_keyboard
 from translations import t
 from utils import engagement_label, smart_flags
@@ -29,9 +30,8 @@ async def _dashboard_text(psych_id: int, lang: str) -> str:
         return t(lang, "no_clients")
     blocks = []
     for client_id, name in clients:
+        note_count = await count_notes(client_id)
         async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute("SELECT COUNT(*) FROM notes WHERE client_id = ?", (client_id,))
-            note_count = (await cur.fetchone())[0]
             cur = await db.execute("SELECT score FROM checkins WHERE client_id = ?", (client_id,))
             scores = [r[0] for r in await cur.fetchall()]
         real = [s for s in scores if s > 0]
@@ -138,9 +138,8 @@ async def engagement_cmd(message: Message):
     if not client_id:
         await message.answer(t(lang, "client_not_found", name=client_name))
         return
+    note_count = await count_notes(client_id)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT COUNT(*) FROM notes WHERE client_id = ?", (client_id,))
-        note_count = (await cur.fetchone())[0]
         cur = await db.execute("SELECT score FROM checkins WHERE client_id = ? ORDER BY id", (client_id,))
         scores = [r[0] for r in await cur.fetchall()]
     real = [s for s in scores if s > 0]

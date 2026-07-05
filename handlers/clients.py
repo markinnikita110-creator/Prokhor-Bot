@@ -20,6 +20,12 @@ from database import (
     to_user_tz,
 )
 from core.db.clients_repository import get_client_lang, resolve_client
+from core.services.notes import (
+    count_notes,
+    get_notes_created_text,
+    get_notes_full,
+    get_notes_text_only,
+)
 from keyboards import (
     archived_list_keyboard,
     cancel_keyboard,
@@ -61,8 +67,7 @@ async def _client_card(client_id: int, psych_id: int, lang: str):
             return None, False, ""
         name, is_archived = row
 
-        cur = await db.execute("SELECT COUNT(*) FROM notes WHERE client_id = ?", (client_id,))
-        notes = (await cur.fetchone())[0]
+        notes = await count_notes(client_id)
 
         cur = await db.execute(
             "SELECT score FROM checkins WHERE client_id = ? AND score > 0", (client_id,))
@@ -425,12 +430,10 @@ async def archived_client_card(callback: CallbackQuery):
 async def _build_timeline(client_id: int, psych_id: int, client_name: str, lang: str) -> str:
     events = []
     session_utc_times: set[str] = set()  # scheduled_at is stored UTC — needs conversion
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT created_at, text FROM notes WHERE client_id = ?", (client_id,))
-        for ts, text in await cur.fetchall():
-            events.append((ts, t(lang, "timeline_note", text=text[:60])))
+    for ts, text in await get_notes_created_text(client_id):
+        events.append((ts, t(lang, "timeline_note", text=text[:60])))
 
+    async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT timestamp, score FROM checkins WHERE client_id = ? AND score > 0", (client_id,))
         for ts, score in await cur.fetchall():
@@ -467,9 +470,8 @@ async def _build_timeline(client_id: int, psych_id: int, client_name: str, lang:
 
 
 async def _build_engagement(client_id: int, client_name: str, lang: str) -> str:
+    note_count = await count_notes(client_id)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT COUNT(*) FROM notes WHERE client_id = ?", (client_id,))
-        note_count = (await cur.fetchone())[0]
         cur = await db.execute(
             "SELECT score FROM checkins WHERE client_id = ? ORDER BY id", (client_id,))
         scores = [r[0] for r in await cur.fetchall()]
@@ -485,12 +487,8 @@ async def _build_engagement(client_id: int, client_name: str, lang: str) -> str:
 async def _fetch_client_data(client_id: int, psych_id: int, client_name: str) -> dict:
     """Fetch all exportable data for a client into a dict of lists."""
     data: dict = {"notes": [], "checkins": [], "homeworks": [], "sessions": []}
+    data["notes"] = await get_notes_full(client_id)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT created_at, note_type, text FROM notes WHERE client_id = ? ORDER BY id",
-            (client_id,))
-        data["notes"] = await cur.fetchall()
-
         cur = await db.execute(
             "SELECT timestamp, score FROM checkins WHERE client_id = ? AND score > 0 ORDER BY id",
             (client_id,))
@@ -961,9 +959,7 @@ async def summary_cmd(message: Message):
     if not client_id:
         await message.answer(t(lang, "client_not_found", name=name))
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT text FROM notes WHERE client_id = ? ORDER BY id", (client_id,))
-        rows = await cur.fetchall()
+    rows = await get_notes_text_only(client_id)
     count = len(rows)
     text = t(lang, "summary_text", client=name, count=count)
     if rows:

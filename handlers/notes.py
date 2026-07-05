@@ -10,6 +10,11 @@ from aiogram.types import CallbackQuery, Message
 
 from database import DB_PATH, get_user_lang, now_str
 from core.db.clients_repository import resolve_client
+from core.services.notes import (
+    get_notes_text_only,
+    insert_plain_note,
+    insert_soap_note,
+)
 from keyboards import cancel_keyboard
 from states.note_states import AddNoteForm, SOAPForm, TagForm
 from translations import t
@@ -26,12 +31,7 @@ async def note_got_text(message: Message, state: FSMContext):
     client_id = data.get("client_id")
     client_name = data.get("client_name", "?")
     await state.clear()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO notes (client_id, text, note_type, created_at) VALUES (?, ?, 'plain', ?)",
-            (client_id, message.text.strip(), now_str())
-        )
-        await db.commit()
+    await insert_plain_note(client_id, message.text.strip(), now_str())
     await message.answer(t(lang, "note_saved", client=client_name))
     log.info("Note saved for client_id=%s", client_id)
 
@@ -80,12 +80,7 @@ async def soap_plan(message: Message, state: FSMContext):
 
     text = (f"S: {data['subjective']}\nO: {data['objective']}\n"
             f"A: {data['assessment']}\nP: {data['plan']}")
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO notes (client_id, text, note_type, created_at) VALUES (?, ?, 'soap', ?)",
-            (client_id, text, now_str())
-        )
-        await db.commit()
+    await insert_soap_note(client_id, text, now_str())
     await message.answer(t(lang, "soap_saved", client=client_name, text=text))
     log.info("SOAP note saved for client_id=%s", client_id)
 
@@ -116,12 +111,7 @@ async def note_cmd(message: Message):
         return
     client_name, text = args[1].strip(), args[2].strip()
     client_id = await resolve_client(message.from_user.id, client_name)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO notes (client_id, text, note_type, created_at) VALUES (?, ?, 'plain', ?)",
-            (client_id, text, now_str())
-        )
-        await db.commit()
+    await insert_plain_note(client_id, text, now_str())
     await message.answer(t(lang, "note_saved", client=client_name))
 
 
@@ -137,9 +127,7 @@ async def notes_cmd(message: Message):
     if not client_id:
         await message.answer(t(lang, "client_not_found", name=name))
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT text FROM notes WHERE client_id = ? ORDER BY id", (client_id,))
-        rows = await cur.fetchall()
+    rows = await get_notes_text_only(client_id)
     if not rows:
         await message.answer(t(lang, "no_notes", client=name))
         return
