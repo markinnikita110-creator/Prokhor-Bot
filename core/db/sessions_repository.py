@@ -301,3 +301,44 @@ async def delete_recurring_sessions_for_client(psych_id: int, client_name: str):
             "DELETE FROM sessions WHERE psychologist_id = ? AND client_name = ? AND recurring = 1",
             (psych_id, client_name))
         await db.commit()
+
+
+# ── Reminder helpers ─────────────────────────────────────────────────────
+
+async def get_sessions_pending_reminders() -> list:
+    """Return sessions still needing a reminder (reminded_1h = 0, booking confirmed or legacy NULL).
+
+    Columns: (id, psychologist_id, client_name, scheduled_at,
+               link, reminded_24h, reminded_1h, client_telegram_id).
+    client_telegram_id is NULL when the client has not connected via Telegram.
+    Only non-recurring one-off sessions and upcoming instances are returned;
+    recurring template rows (recurring=1) have reminded_1h=0 forever and are
+    excluded implicitly because they never fall inside the reminder windows.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT s.id, s.psychologist_id, s.client_name, s.scheduled_at, "
+            "s.link, s.reminded_24h, s.reminded_1h, c.telegram_id "
+            "FROM sessions s "
+            "LEFT JOIN clients c ON c.psychologist_id = s.psychologist_id "
+            "  AND c.name = s.client_name "
+            "WHERE s.reminded_1h = 0 "
+            "AND (s.booking_status = 'confirmed' OR s.booking_status IS NULL)"
+        )
+        return await cur.fetchall()
+
+
+async def mark_reminded_24h(session_id: int) -> None:
+    """Set reminded_24h = 1.  Called after both psych and client send attempts."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE sessions SET reminded_24h = 1 WHERE id = ?", (session_id,))
+        await db.commit()
+
+
+async def mark_reminded_1h(session_id: int) -> None:
+    """Set reminded_1h = 1.  Called after both psych and client send attempts."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE sessions SET reminded_1h = 1 WHERE id = ?", (session_id,))
+        await db.commit()
