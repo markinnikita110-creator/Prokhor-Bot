@@ -74,6 +74,10 @@ TEXTS = {
         "btn_skip":      "⏭ Skip for now",
         "btn_timezone":  "🕐 Timezone",
         "tz_skipped": "Timezone set to UTC for now — change it any time in ⚙️ Settings.",
+        "tz_confirm_prompt": (
+            "⚠️ Your timezone isn't set yet (currently UTC). "
+            "Please choose your actual timezone so session times display correctly:"
+        ),
         "sessions_title": "📅 Upcoming sessions:",
         "no_sessions": "No upcoming sessions yet. Time to schedule one?",
         "session_row": "#{id} · {client} · {date}",
@@ -824,6 +828,10 @@ TEXTS = {
         "btn_skip":      "⏭ Пропустить",
         "btn_timezone":  "🕐 Часовой пояс",
         "tz_skipped": "Часовой пояс пока UTC — можно изменить в ⚙️ Настройках.",
+        "tz_confirm_prompt": (
+            "⚠️ Часовой пояс пока не задан (сейчас UTC). "
+            "Пожалуйста, выбери свой реальный часовой пояс — иначе время сессий будет отображаться неверно:"
+        ),
         "sessions_title": "📅 Предстоящие сессии:",
         "no_sessions": "Предстоящих сессий пока нет. Запланируем?",
         "session_row": "#{id} · {client} · {date}",

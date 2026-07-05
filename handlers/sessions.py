@@ -10,8 +10,20 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from database import (
-    DB_PATH, format_offset, get_client_lang, get_client_timezone,
-    get_user_lang, get_user_timezone, local_to_utc, now_utc, utc_to_local,
+    DB_PATH, format_offset,
+    get_user_lang, get_user_timezone, local_to_utc, now_utc, to_user_tz, utc_to_local,
+)
+from core.db.clients_repository import get_client_lang, get_client_timezone
+from core.services.sessions import (
+    confirm_reschedule,
+    delete_session,
+    get_session_card,
+    get_session_client_and_time,
+    get_session_for_reschedule_confirm,
+    get_session_psych_and_client,
+    get_upcoming_sessions,
+    insert_session,
+    propose_reschedule,
 )
 from keyboards import (
     cancel_keyboard,
@@ -84,12 +96,7 @@ async def _save_session(psych_id: int, client_name: str, local_dt_str: str, lang
     """local_dt_str is in the psychologist's local timezone; stored as UTC in the DB."""
     _, psych_offset = await get_user_timezone(psych_id)
     utc_dt_str = local_to_utc(local_dt_str, psych_offset)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO sessions (psychologist_id, client_name, scheduled_at) VALUES (?, ?, ?)",
-            (psych_id, client_name, utc_dt_str)
-        )
-        await db.commit()
+    await insert_session(psych_id, client_name, utc_dt_str)
     offset_label = format_offset(psych_offset)
     tz_info = t(lang, "tz_info", offset=offset_label)
     await message.answer(t(lang, "session_scheduled", client=client_name,
@@ -104,16 +111,10 @@ async def session_list_cb(callback: CallbackQuery):
     lang = await get_user_lang(callback.from_user.id)
     page = int(callback.data.split("_")[1])
     now = now_utc()
-    _, psych_offset = await get_user_timezone(callback.from_user.id)
+    psych_tz, _ = await get_user_timezone(callback.from_user.id)
     await callback.answer()
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, client_name, scheduled_at FROM sessions "
-            "WHERE psychologist_id = ? AND scheduled_at >= ? ORDER BY scheduled_at",
-            (callback.from_user.id, now)
-        )
-        sessions_raw = await cur.fetchall()
-    sessions = [(sid, name, utc_to_local(dt, psych_offset)) for sid, name, dt in sessions_raw]
+    sessions_raw = await get_upcoming_sessions(callback.from_user.id, now)
+    sessions = [(sid, name, to_user_tz(dt, psych_tz, "%Y-%m-%d %H:%M")) for sid, name, dt in sessions_raw]
     if not sessions:
         try:
             await callback.message.edit_text(t(lang, "no_sessions"),
@@ -138,23 +139,17 @@ async def session_card_cb(callback: CallbackQuery):
     lang = await get_user_lang(callback.from_user.id)
     session_id = int(callback.data.split("_")[1])
     await callback.answer()
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT client_name, scheduled_at, booking_status, proposed_start_datetime_utc "
-            "FROM sessions WHERE id = ? AND psychologist_id = ?",
-            (session_id, callback.from_user.id)
-        )
-        row = await cur.fetchone()
+    row = await get_session_card(session_id, callback.from_user.id)
     if not row:
         await callback.message.answer(t(lang, "session_not_found"))
         return
     client_name, scheduled_at_utc, booking_status, proposed_utc = row
-    _, psych_offset = await get_user_timezone(callback.from_user.id)
-    scheduled_local = utc_to_local(scheduled_at_utc, psych_offset)
+    psych_tz, _ = await get_user_timezone(callback.from_user.id)
+    scheduled_local = to_user_tz(scheduled_at_utc, psych_tz, "%Y-%m-%d %H:%M")
     text = t(lang, "session_row", id=session_id, client=client_name, date=scheduled_local)
     # Show status badge for non-confirmed sessions
     if booking_status == "pending_client" and proposed_utc:
-        proposed_local = utc_to_local(proposed_utc, psych_offset)
+        proposed_local = to_user_tz(proposed_utc, psych_tz, "%Y-%m-%d %H:%M")
         text = f"{text}\n\n{t(lang, 'session_pending_client_badge')}\n📅 → {proposed_local}"
     elif booking_status == "pending_psych":
         text = f"{text}\n\n{t(lang, 'session_pending_psych_badge')}"
@@ -172,27 +167,22 @@ async def session_cancel_cb(callback: CallbackQuery, bot: Bot):
     lang = await get_user_lang(callback.from_user.id)
     session_id = int(callback.data.split("_")[1])
     await callback.answer()
+    row = await get_session_client_and_time(session_id, callback.from_user.id)
+    if not row:
+        await callback.message.answer(t(lang, "session_not_found"))
+        return
+    client_name, scheduled_at_utc = row
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT client_name, scheduled_at FROM sessions WHERE id = ? AND psychologist_id = ?",
-            (session_id, callback.from_user.id)
-        )
-        row = await cur.fetchone()
-        if not row:
-            await callback.message.answer(t(lang, "session_not_found"))
-            return
-        client_name, scheduled_at_utc = row
         cur = await db.execute(
             "SELECT telegram_id FROM clients WHERE psychologist_id = ? AND name = ?",
             (callback.from_user.id, client_name)
         )
         client_row = await cur.fetchone()
-        await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        await db.commit()
+    await delete_session(session_id)
     if client_row and client_row[0]:
         c_lang = await get_client_lang(client_row[0])
-        _, c_offset = await get_client_timezone(client_row[0])
-        client_local = utc_to_local(scheduled_at_utc, c_offset)
+        c_tz, _ = await get_client_timezone(client_row[0])
+        client_local = to_user_tz(scheduled_at_utc, c_tz, "%Y-%m-%d %H:%M")
         await bot.send_message(client_row[0],
             t(c_lang, "session_cancelled_notify", date=client_local))
     try:
@@ -229,39 +219,28 @@ async def reschedule_got_dt(message: Message, state: FSMContext, bot: Bot):
     _, psych_offset = await get_user_timezone(message.from_user.id)
     utc_dt_str = local_to_utc(local_dt_str, psych_offset)
 
+    row = await get_session_client_and_time(session_id, message.from_user.id)
+    if not row:
+        await message.answer(t(lang, "session_not_found"))
+        return
+    client_name, old_utc_str = row
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT client_name, scheduled_at FROM sessions WHERE id = ? AND psychologist_id = ?",
-            (session_id, message.from_user.id)
-        )
-        row = await cur.fetchone()
-        if not row:
-            await message.answer(t(lang, "session_not_found"))
-            return
-        client_name, old_utc_str = row
-        cur = await db.execute(
-            "SELECT telegram_id, utc_offset FROM clients WHERE psychologist_id = ? AND name = ?",
+            "SELECT telegram_id, timezone FROM clients WHERE psychologist_id = ? AND name = ?",
             (message.from_user.id, client_name)
         )
         client_row = await cur.fetchone()
-        # Propose reschedule: write new time without moving scheduled_at yet
-        await db.execute(
-            "UPDATE sessions SET proposed_start_datetime_utc = ?, "
-            "booking_status = 'pending_client' WHERE id = ?",
-            (utc_dt_str, session_id)
-        )
-        await db.commit()
+    # Propose reschedule: write new time without moving scheduled_at yet
+    await propose_reschedule(session_id, utc_dt_str)
 
     await message.answer(
         t(lang, "session_reschedule_proposed", client=client_name))
 
     if client_row and client_row[0]:
-        client_tg, client_offset = client_row
+        client_tg, client_tz = client_row
         c_lang = await get_client_lang(client_tg)
-        old_local = utc_to_local(old_utc_str, client_offset)
-        new_local = utc_to_local(utc_dt_str, client_offset)
-        old_display = datetime.strptime(old_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
-        new_display = datetime.strptime(new_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        old_display = to_user_tz(old_utc_str, client_tz, "%d.%m.%Y %H:%M")
+        new_display = to_user_tz(utc_dt_str, client_tz, "%d.%m.%Y %H:%M")
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text=t(c_lang, "btn_rsc_confirm"),
@@ -303,15 +282,9 @@ async def schedule_cmd(message: Message):
 async def sessions_cmd(message: Message):
     lang = await get_user_lang(message.from_user.id)
     now = now_utc()
-    _, psych_offset = await get_user_timezone(message.from_user.id)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, client_name, scheduled_at FROM sessions "
-            "WHERE psychologist_id = ? AND scheduled_at >= ? ORDER BY scheduled_at",
-            (message.from_user.id, now)
-        )
-        rows_raw = await cur.fetchall()
-    rows = [(sid, name, utc_to_local(dt, psych_offset)) for sid, name, dt in rows_raw]
+    psych_tz, _ = await get_user_timezone(message.from_user.id)
+    rows_raw = await get_upcoming_sessions(message.from_user.id, now)
+    rows = [(sid, name, to_user_tz(dt, psych_tz, "%Y-%m-%d %H:%M")) for sid, name, dt in rows_raw]
     if not rows:
         await message.answer(t(lang, "no_sessions"))
         return
@@ -331,27 +304,22 @@ async def cancel_session_cmd(message: Message, bot: Bot):
     except ValueError:
         await message.answer(t(lang, "id_invalid"))
         return
+    row = await get_session_client_and_time(session_id, message.from_user.id)
+    if not row:
+        await message.answer(t(lang, "session_not_found"))
+        return
+    client_name, scheduled_at_utc = row
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT client_name, scheduled_at FROM sessions WHERE id = ? AND psychologist_id = ?",
-            (session_id, message.from_user.id)
-        )
-        row = await cur.fetchone()
-        if not row:
-            await message.answer(t(lang, "session_not_found"))
-            return
-        client_name, scheduled_at_utc = row
         cur = await db.execute(
             "SELECT telegram_id FROM clients WHERE psychologist_id = ? AND name = ?",
             (message.from_user.id, client_name)
         )
         client_row = await cur.fetchone()
-        await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        await db.commit()
+    await delete_session(session_id)
     if client_row and client_row[0]:
         c_lang = await get_client_lang(client_row[0])
-        _, c_offset = await get_client_timezone(client_row[0])
-        client_local = utc_to_local(scheduled_at_utc, c_offset)
+        c_tz, _ = await get_client_timezone(client_row[0])
+        client_local = to_user_tz(scheduled_at_utc, c_tz, "%Y-%m-%d %H:%M")
         await bot.send_message(client_row[0],
             t(c_lang, "session_cancelled_notify", date=client_local))
     await message.answer(t(lang, "session_cancelled", id=session_id))
@@ -377,36 +345,25 @@ async def reschedule_session_cmd(message: Message, bot: Bot):
         return
     _, psych_offset = await get_user_timezone(message.from_user.id)
     utc_dt_str = local_to_utc(local_dt_str, psych_offset)
+    row = await get_session_client_and_time(session_id, message.from_user.id)
+    if not row:
+        await message.answer(t(lang, "session_not_found"))
+        return
+    client_name, old_utc_str = row
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT client_name, scheduled_at FROM sessions WHERE id = ? AND psychologist_id = ?",
-            (session_id, message.from_user.id)
-        )
-        row = await cur.fetchone()
-        if not row:
-            await message.answer(t(lang, "session_not_found"))
-            return
-        client_name, old_utc_str = row
-        cur = await db.execute(
-            "SELECT telegram_id, utc_offset FROM clients WHERE psychologist_id = ? AND name = ?",
+            "SELECT telegram_id, timezone FROM clients WHERE psychologist_id = ? AND name = ?",
             (message.from_user.id, client_name)
         )
         client_row = await cur.fetchone()
-        await db.execute(
-            "UPDATE sessions SET proposed_start_datetime_utc = ?, "
-            "booking_status = 'pending_client' WHERE id = ?",
-            (utc_dt_str, session_id)
-        )
-        await db.commit()
+    await propose_reschedule(session_id, utc_dt_str)
     await message.answer(
         t(lang, "session_reschedule_proposed", client=client_name))
     if client_row and client_row[0]:
-        client_tg, client_offset = client_row
+        client_tg, client_tz = client_row
         c_lang = await get_client_lang(client_tg)
-        old_local = utc_to_local(old_utc_str, client_offset)
-        new_local = utc_to_local(utc_dt_str, client_offset)
-        old_display = datetime.strptime(old_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
-        new_display = datetime.strptime(new_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        old_display = to_user_tz(old_utc_str, client_tz, "%d.%m.%Y %H:%M")
+        new_display = to_user_tz(utc_dt_str, client_tz, "%d.%m.%Y %H:%M")
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text=t(c_lang, "btn_rsc_confirm"),
@@ -436,29 +393,19 @@ async def bkc_rsc_confirm_cb(callback: CallbackQuery, bot: Bot):
     c_lang = await get_client_lang(uid)
     await callback.answer()
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT psychologist_id, client_name, scheduled_at, "
-            "proposed_start_datetime_utc, booking_status FROM sessions WHERE id = ?",
-            (session_id,))
-        row = await cur.fetchone()
-        if not row:
-            return
-        psych_id, client_name, old_utc, proposed_utc, status = row
-        if status != "pending_client" or not proposed_utc:
-            # Already confirmed (double tap) — silent ignore
-            return
-        # Commit the new time: move proposed → scheduled_at, reset reminders
-        await db.execute(
-            "UPDATE sessions SET scheduled_at = ?, proposed_start_datetime_utc = NULL, "
-            "booking_status = 'confirmed', reminded_24h = 0, reminded_1h = 0 WHERE id = ?",
-            (proposed_utc, session_id))
-        await db.commit()
+    row = await get_session_for_reschedule_confirm(session_id)
+    if not row:
+        return
+    psych_id, client_name, old_utc, proposed_utc, status = row
+    if status != "pending_client" or not proposed_utc:
+        # Already confirmed (double tap) — silent ignore
+        return
+    # Commit the new time: move proposed → scheduled_at, reset reminders
+    await confirm_reschedule(session_id, proposed_utc)
 
     # Confirm to client
-    _, c_offset = await get_client_timezone(uid)
-    new_local = utc_to_local(proposed_utc, c_offset)
-    new_display = datetime.strptime(new_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    c_tz, _ = await get_client_timezone(uid)
+    new_display = to_user_tz(proposed_utc, c_tz, "%d.%m.%Y %H:%M")
     try:
         await callback.message.edit_text(
             t(c_lang, "booking_rsc_confirmed_client", datetime=new_display),
@@ -469,9 +416,8 @@ async def bkc_rsc_confirm_cb(callback: CallbackQuery, bot: Bot):
 
     # Notify psychologist
     p_lang = await get_user_lang(psych_id)
-    _, p_offset = await get_user_timezone(psych_id)
-    p_local = utc_to_local(proposed_utc, p_offset)
-    p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    p_tz, _ = await get_user_timezone(psych_id)
+    p_display = to_user_tz(proposed_utc, p_tz, "%d.%m.%Y %H:%M")
     try:
         await bot.send_message(
             psych_id,
@@ -492,14 +438,10 @@ async def bkc_rsc_contact_cb(callback: CallbackQuery, bot: Bot):
     uid = callback.from_user.id
     await callback.answer()
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT psychologist_id, client_name FROM sessions WHERE id = ?",
-            (session_id,))
-        row = await cur.fetchone()
-        if not row:
-            return
-        psych_id, client_name = row
+    row = await get_session_psych_and_client(session_id)
+    if not row:
+        return
+    psych_id, client_name = row
 
     # Remove buttons so client can't tap again
     try:

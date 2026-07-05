@@ -359,34 +359,134 @@ async def legal_delete_confirm_cb(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
 
-    deleted_from: list[str] = []
-    skipped: list[str] = []
     try:
         async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
+
+            # ── 1. Tables that reference client_id (must go before clients) ──────
+            # notes, checkins, homeworks, client_tags have no psychologist_id column;
+            # they link to the psychologist only through clients.psychologist_id.
+            for tbl in ("client_tags", "notes", "checkins", "homeworks"):
+                await db.execute(
+                    f"DELETE FROM {tbl} WHERE client_id IN "
+                    f"(SELECT id FROM clients WHERE psychologist_id = ?)",
+                    (uid,),
+                )
+
+            # ── 2. Cohort cascade (must go before cohorts) ────────────────────────
+            # cohort_session_notes has a direct psychologist_id column.
+            await db.execute(
+                "DELETE FROM cohort_session_notes WHERE psychologist_id = ?",
+                (uid,),
             )
-            tables = [row[0] for row in await cur.fetchall()]
-            for table in tables:
-                try:
-                    await db.execute(
-                        f"DELETE FROM {table} WHERE user_id = ?", (uid,)
-                    )
-                    deleted_from.append(table)
-                except Exception:
-                    skipped.append(table)
+            # cohort_attendance links through cohort_sessions → cohorts.
+            await db.execute(
+                "DELETE FROM cohort_attendance WHERE session_id IN ("
+                "  SELECT id FROM cohort_sessions WHERE cohort_id IN ("
+                "    SELECT id FROM cohorts WHERE psychologist_id = ?"
+                "  )"
+                ")",
+                (uid,),
+            )
+            for tbl in ("cohort_sessions", "cohort_checkins",
+                        "cohort_checkin_configs", "cohort_members"):
+                await db.execute(
+                    f"DELETE FROM {tbl} WHERE cohort_id IN "
+                    f"(SELECT id FROM cohorts WHERE psychologist_id = ?)",
+                    (uid,),
+                )
+
+            # ── 3. Tables with psychologist_id ────────────────────────────────────
+            for tbl in ("cohorts", "supervision_cases", "auto_checkins",
+                        "reminders", "sessions", "clients"):
+                await db.execute(
+                    f"DELETE FROM {tbl} WHERE psychologist_id = ?", (uid,)
+                )
+
+            # ── 4. Tables with psych_id (booking system) ──────────────────────────
+            for tbl in ("availability_exceptions", "availability_rules",
+                        "booking_profile"):
+                await db.execute(
+                    f"DELETE FROM {tbl} WHERE psych_id = ?", (uid,)
+                )
+            # booking_requests_log: delete both as psychologist AND as booking client
+            await db.execute(
+                "DELETE FROM booking_requests_log WHERE psych_id = ? OR client_telegram_id = ?",
+                (uid, uid),
+            )
+
+            # ── 5. Tables with user_id (psychologists row last) ───────────────────
+            # user_plans is intentionally excluded: the subscription tier is
+            # autonomous and must survive account deletion so it can be restored
+            # if the user signs up again.
+            for tbl in ("user_consents", "psychologists"):
+                await db.execute(
+                    f"DELETE FROM {tbl} WHERE user_id = ?", (uid,)
+                )
+
+            # ── 7. FSM storage ────────────────────────────────────────────────────
+            # Key format: bot_id:user_id:chat_id:thread_id::destiny
+            # Extract the 2nd colon-delimited segment and compare exactly — avoids
+            # matching other users whose IDs happen to be a substring of this uid.
+            await db.execute(
+                "DELETE FROM fsm_storage WHERE "
+                "CAST(SUBSTR(key, INSTR(key,':')+1, "
+                "INSTR(SUBSTR(key, INSTR(key,':')+1), ':')-1) AS INTEGER) = ?",
+                (uid,),
+            )
+
             await db.commit()
-        await state.clear()
-        log.info(
-            "Data deleted: user_id=%d tables=%s skipped=%s",
-            uid, deleted_from, skipped,
+
+        # ── Verification: one probe per ownership family ───────────────────────
+        # psychologist_id family → clients + sessions
+        # psych_id family        → booking_profile
+        # user_id family         → psychologists (the root row)
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM clients WHERE psychologist_id = ?", (uid,)
+            )
+            clients_left = (await cur.fetchone())[0]
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM sessions WHERE psychologist_id = ?", (uid,)
+            )
+            sessions_left = (await cur.fetchone())[0]
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM cohorts WHERE psychologist_id = ?", (uid,)
+            )
+            cohorts_left = (await cur.fetchone())[0]
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM booking_profile WHERE psych_id = ?", (uid,)
+            )
+            booking_left = (await cur.fetchone())[0]
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM psychologists WHERE user_id = ?", (uid,)
+            )
+            psych_row_left = (await cur.fetchone())[0]
+
+        residual = (
+            clients_left + sessions_left + cohorts_left
+            + booking_left + psych_row_left
         )
+        if residual > 0:
+            log.error(
+                "delete_my_data INCOMPLETE: user_id=%d "
+                "clients=%d sessions=%d cohorts=%d booking=%d psych_row=%d",
+                uid, clients_left, sessions_left,
+                cohorts_left, booking_left, psych_row_left,
+            )
+            await callback.message.answer(
+                "⚠️ Удаление выполнено не полностью. Обратитесь в поддержку: @nick_mnm"
+            )
+            return
+
+        await state.clear()
+        log.info("delete_my_data SUCCESS: user_id=%d", uid)
         await callback.message.answer(
             "✅ Все ваши данные удалены.\n"
             "Если захотите вернуться — напишите /start"
         )
+
     except Exception as e:
-        log.error("delete_my_data error: %s", e)
+        log.error("delete_my_data error: user_id=%d %s", uid, e)
         await callback.message.answer(
             "⚠️ Произошла ошибка при удалении данных. Попробуйте позже."
         )

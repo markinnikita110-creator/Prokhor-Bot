@@ -542,7 +542,7 @@ async def adm_find_got_query(message: Message, state: FSMContext):
         f"👤 *Пользователь*\n\n"
         f"ID: `{uid}`\n"
         f"@username: {('@' + uname) if uname else '—'}\n"
-        f"Зарегистрирован: {created_at or '—'}\n"
+        f"Зарегистрирован: {created_at + ' UTC' if created_at else '—'}\n"
         f"Тариф: *{plan.upper()}* (до {exp_str})\n"
         f"Клиентов: {client_count}"
     )
@@ -809,3 +809,316 @@ async def backup_cmd(message: Message, bot: Bot):
     except Exception as exc:
         log.exception("BACKUP CMD: ошибка при ручном бэкапе")
         await notice.edit_text(f"❌ Ошибка бэкапа:\n`{exc}`", parse_mode="Markdown")
+
+
+# ── Section: Backup (inline button) ──────────────────────────────────────────
+
+@router.callback_query(F.data == "adm:backup")
+async def adm_backup(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.clear()
+    await callback.answer("Создаю бэкап…")
+    notice = await callback.message.answer("⏳ Создаю резервную копию…")
+    try:
+        from backup_service import create_backup_and_send
+        await create_backup_and_send(bot)
+        await notice.edit_text("✅ Бэкап создан и отправлен в канал.", reply_markup=_back_kb())
+    except Exception as exc:
+        log.exception("BACKUP BUTTON: ошибка при ручном бэкапе")
+        await notice.edit_text(
+            f"❌ Ошибка бэкапа:\n`{exc}`",
+            reply_markup=_back_kb(), parse_mode="Markdown"
+        )
+
+
+# ── Section: Promo codes ──────────────────────────────────────────────────────
+
+async def _promo_list_screen(target, promos: list) -> None:
+    """Render the promo list message (used by both open and after-delete refresh)."""
+    if promos:
+        lines = []
+        for code, plan, duration_days, max_uses, used_count, _ in promos:
+            days_str = f"{duration_days} дн." if duration_days else "∞"
+            max_str  = str(max_uses) if max_uses else "∞"
+            lines.append(
+                f"• `{code}` — {plan.upper()}, {days_str}, "
+                f"использован {used_count}/{max_str}"
+            )
+        text = "🎟 *Промокоды*\n\n" + "\n".join(lines)
+    else:
+        text = "🎟 *Промокоды*\n\n_Промокодов пока нет._"
+
+    del_rows = [
+        [
+            InlineKeyboardButton(text=f"🗑 {code}", callback_data=f"adm:promo:del:{code}"),
+        ]
+        for code, *_ in promos
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *del_rows,
+        [InlineKeyboardButton(text="➕ Создать промокод", callback_data="adm:promo:new")],
+        [InlineKeyboardButton(text="⬅️ Главная",          callback_data="adm:home")],
+    ])
+    await _edit_or_answer(target, text, kb, parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "adm:promo")
+async def adm_promo(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.clear()
+    await callback.answer()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT code, plan, duration_days, max_uses, used_count, created_at "
+            "FROM promo_codes ORDER BY created_at DESC"
+        )
+        promos = await cur.fetchall()
+    await _promo_list_screen(callback.message, promos)
+
+
+# ── Create promo FSM ──────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm:promo:new")
+async def adm_promo_new(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.clear()
+    await callback.answer()
+    await state.set_state(AdminPromoForm.code)
+    await callback.message.answer(
+        "🎟 *Новый промокод*\n\nВведите текст промокода (без пробелов):",
+        reply_markup=_cancel_kb(), parse_mode="Markdown"
+    )
+
+
+@router.message(AdminPromoForm.code)
+async def adm_promo_got_code(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    code = (message.text or "").strip().upper()
+    if not code or " " in code:
+        await message.answer(
+            "❌ Код не может быть пустым или содержать пробелы:",
+            reply_markup=_cancel_kb()
+        )
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT 1 FROM promo_codes WHERE code = ?", (code,))
+        if await cur.fetchone():
+            await message.answer(
+                f"❌ Промокод `{code}` уже существует. Введите другой:",
+                reply_markup=_cancel_kb(), parse_mode="Markdown"
+            )
+            return
+    await state.update_data(code=code)
+    await state.set_state(AdminPromoForm.plan)
+    await message.answer(
+        f"Промокод: `{code}`\n\nВведите тариф — `start` или `pro`:",
+        reply_markup=_cancel_kb(), parse_mode="Markdown"
+    )
+
+
+@router.message(AdminPromoForm.plan)
+async def adm_promo_got_plan(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    plan = (message.text or "").strip().lower()
+    if plan not in ("start", "pro"):
+        await message.answer(
+            "❌ Допустимые значения: `start` или `pro`",
+            reply_markup=_cancel_kb(), parse_mode="Markdown"
+        )
+        return
+    await state.update_data(plan=plan)
+    await state.set_state(AdminPromoForm.days)
+    await message.answer(
+        f"Тариф: `{plan.upper()}`\n\nСрок действия в днях (0 — бессрочно):",
+        reply_markup=_cancel_kb(), parse_mode="Markdown"
+    )
+
+
+@router.message(AdminPromoForm.days)
+async def adm_promo_got_days(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    try:
+        raw = int((message.text or "").strip())
+        if raw < 0:
+            raise ValueError
+        days = None if raw == 0 else raw
+    except (ValueError, AttributeError):
+        await message.answer("❌ Введите целое число ≥ 0:", reply_markup=_cancel_kb())
+        return
+    await state.update_data(days=days)
+    await state.set_state(AdminPromoForm.max_uses)
+    await message.answer(
+        "Максимальное количество использований (0 — без ограничений):",
+        reply_markup=_cancel_kb()
+    )
+
+
+@router.message(AdminPromoForm.max_uses)
+async def adm_promo_got_max_uses(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    try:
+        raw = int((message.text or "").strip())
+        if raw < 0:
+            raise ValueError
+        max_uses = None if raw == 0 else raw
+    except (ValueError, AttributeError):
+        await message.answer("❌ Введите целое число ≥ 0:", reply_markup=_cancel_kb())
+        return
+    await state.update_data(max_uses=max_uses)
+    await state.set_state(AdminPromoForm.confirm)
+
+    data = await state.get_data()
+    code     = data["code"]
+    plan     = data["plan"]
+    days     = data.get("days")
+    days_str = f"{days} дн." if days else "бессрочно"
+    max_str  = str(max_uses) if max_uses else "без ограничений"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Создать", callback_data="adm:promo_ok"),
+        InlineKeyboardButton(text="❌ Отмена",  callback_data="adm:promo_cancel"),
+    ]])
+    await message.answer(
+        f"🔔 *Подтвердите создание промокода*\n\n"
+        f"Код: `{code}`\n"
+        f"Тариф: `{plan.upper()}`\n"
+        f"Срок: {days_str}\n"
+        f"Макс. использований: {max_str}",
+        reply_markup=kb, parse_mode="Markdown"
+    )
+
+
+@router.callback_query(F.data == "adm:promo_ok", AdminPromoForm.confirm)
+async def adm_promo_ok(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    data     = await state.get_data()
+    code     = data["code"]
+    plan     = data["plan"]
+    days     = data.get("days")
+    max_uses = data.get("max_uses")
+    await state.clear()
+    await callback.answer("Создаю…")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute(
+                "INSERT INTO promo_codes "
+                "(code, plan, duration_days, max_uses, used_count, created_at) "
+                "VALUES (?, ?, ?, ?, 0, ?)",
+                (code, plan, days, max_uses,
+                 datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
+            )
+            await db.execute(
+                "INSERT INTO admin_actions_log "
+                "(action_type, details, created_at_utc) VALUES (?,?,?)",
+                (
+                    "create_promo",
+                    f"code={code} plan={plan} days={days} max_uses={max_uses}",
+                    datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            await db.commit()
+        except Exception as exc:
+            await callback.message.edit_text(
+                f"❌ Ошибка создания промокода:\n`{exc}`",
+                reply_markup=_back_kb(), parse_mode="Markdown"
+            )
+            return
+
+    days_str = f"{days} дн." if days else "бессрочно"
+    max_str  = str(max_uses) if max_uses else "без ограничений"
+    await callback.message.edit_text(
+        f"✅ *Промокод создан*\n\n"
+        f"Код: `{code}`\n"
+        f"Тариф: `{plan.upper()}`\n"
+        f"Срок: {days_str}\n"
+        f"Макс. использований: {max_str}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🎟 К промокодам", callback_data="adm:promo"),
+            InlineKeyboardButton(text="⬅️ Главная",      callback_data="adm:home"),
+        ]]),
+        parse_mode="Markdown"
+    )
+    log.info(
+        "ADMIN: created promo code=%s plan=%s days=%s max_uses=%s",
+        code, plan, days, max_uses
+    )
+
+
+@router.callback_query(F.data == "adm:promo_cancel", AdminPromoForm.confirm)
+async def adm_promo_cancel(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.clear()
+    await callback.answer("Отменено")
+    await callback.message.edit_text(
+        "❌ Создание промокода отменено.", reply_markup=_back_kb()
+    )
+
+
+# ── Delete promo ──────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("adm:promo:del:"))
+async def adm_promo_del(callback: CallbackQuery, state: FSMContext):
+    """Ask for delete confirmation. Prefix-safe: checked before delok handler."""
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    # Skip if this is actually a delok callback (should not reach here, but guard anyway)
+    if ":delok:" in callback.data:
+        return
+    code = callback.data[len("adm:promo:del:"):]
+    await callback.answer()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"adm:promo:delok:{code}"),
+        InlineKeyboardButton(text="❌ Отмена",       callback_data="adm:promo"),
+    ]])
+    await callback.message.answer(
+        f"⚠️ Удалить промокод `{code}`?",
+        reply_markup=kb, parse_mode="Markdown"
+    )
+
+
+@router.callback_query(F.data.startswith("adm:promo:delok:"))
+async def adm_promo_delok(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    code = callback.data[len("adm:promo:delok:"):]
+    await callback.answer("Удаляю…")
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM promo_codes WHERE code = ?", (code,))
+        await db.execute(
+            "INSERT INTO admin_actions_log "
+            "(action_type, details, created_at_utc) VALUES (?,?,?)",
+            (
+                "delete_promo",
+                f"code={code}",
+                datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+        await db.commit()
+
+    await callback.message.edit_text(
+        f"🗑 Промокод `{code}` удалён.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🎟 К промокодам", callback_data="adm:promo"),
+            InlineKeyboardButton(text="⬅️ Главная",      callback_data="adm:home"),
+        ]]),
+        parse_mode="Markdown"
+    )
+    log.info("ADMIN: deleted promo code=%s", code)

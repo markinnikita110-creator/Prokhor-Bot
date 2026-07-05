@@ -4,15 +4,11 @@ from aiogram.fsm.state import State, StatesGroup
 class BookingSetupForm(StatesGroup):
     display_name = State()
     bio = State()
-    timezone = State()
-    timezone_custom = State()
 
 
 class BookingEditForm(StatesGroup):
     display_name = State()
     bio = State()
-    timezone = State()
-    timezone_custom = State()
 
 
 class BookingScheduleForm(StatesGroup):

@@ -5,6 +5,7 @@ Entry point: sets up bot, registers all routers, runs reminder loop, starts poll
 import asyncio
 import logging
 import os
+import sqlite3
 from datetime import datetime, timedelta
 
 import aiosqlite
@@ -16,10 +17,14 @@ from aiogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from fsm_storage import SQLiteFSMStorage
 
 from database import (
-    DB_PATH, get_client_lang, get_client_timezone, get_user_lang,
-    get_user_timezone, get_cohort_member_lang, get_cohort_member_timezone,
-    init_db, migrate_db, now_str, utc_to_local,
+    DB_PATH, get_user_lang,
+    get_user_timezone,
+    init_db, migrate_db, now_str, to_user_tz, utc_to_local,
 )
+from core.db.clients_repository import (
+    get_client_lang, get_client_timezone, get_cohort_member_lang, get_cohort_member_timezone,
+)
+from db_guard import ensure_db_schema
 from handlers import routers
 from handlers.clients import set_bot_username
 from handlers.cohorts import generate_recurring_cohort_sessions  # RECURRING
@@ -64,9 +69,9 @@ async def generate_recurring_individual_sessions():
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT s.id, s.psychologist_id, s.client_name, s.days_of_week, "
-            "s.scheduled_at, s.topic, s.link, p.tz_offset "
+            "s.scheduled_at, s.topic, s.link, p.utc_offset "
             "FROM sessions s "
-            "JOIN psychologists p ON p.telegram_id = s.psychologist_id "
+            "JOIN psychologists p ON p.user_id = s.psychologist_id "
             "JOIN clients c ON c.psychologist_id = s.psychologist_id "
             "  AND c.name = s.client_name "
             "WHERE s.recurring = 1 AND c.is_archived = 0 AND c.recurring_paused = 0"
@@ -156,9 +161,8 @@ async def reminder_loop():
                     continue
                 delta = session_dt - now
                 p_lang = await get_user_lang(psych_id)
-                _, p_offset = await get_user_timezone(psych_id)
-                p_local = utc_to_local(scheduled_at_str, p_offset)
-                p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%H:%M")
+                p_tz, _ = await get_user_timezone(psych_id)
+                p_display = to_user_tz(scheduled_at_str, p_tz, "%H:%M")
                 link_line = t(p_lang, "session_link_line", link=link) if link else ""
 
                 # Fix 2: each send wrapped individually — one blocked/unavailable
@@ -176,9 +180,8 @@ async def reminder_loop():
                     if client_tg:
                         try:
                             c_lang = await get_client_lang(client_tg)
-                            _, c_offset = await get_client_timezone(client_tg)
-                            c_local = utc_to_local(scheduled_at_str, c_offset)
-                            c_display = datetime.strptime(c_local, "%Y-%m-%d %H:%M").strftime("%H:%M")
+                            c_tz, _ = await get_client_timezone(client_tg)
+                            c_display = to_user_tz(scheduled_at_str, c_tz, "%H:%M")
                             c_link = t(c_lang, "session_link_line", link=link) if link else ""
                             await bot.send_message(
                                 client_tg,
@@ -207,9 +210,8 @@ async def reminder_loop():
                     if client_tg:
                         try:
                             c_lang = await get_client_lang(client_tg)
-                            _, c_offset = await get_client_timezone(client_tg)
-                            c_local = utc_to_local(scheduled_at_str, c_offset)
-                            c_display = datetime.strptime(c_local, "%Y-%m-%d %H:%M").strftime("%H:%M")
+                            c_tz, _ = await get_client_timezone(client_tg)
+                            c_display = to_user_tz(scheduled_at_str, c_tz, "%H:%M")
                             c_link = t(c_lang, "session_link_line", link=link) if link else ""
                             await bot.send_message(
                                 client_tg,
@@ -253,9 +255,8 @@ async def reminder_loop():
 
                 if not r24 and timedelta(hours=23) < delta <= timedelta(hours=25):
                     p_lang = await get_user_lang(psych_id)
-                    _, p_offset = await get_user_timezone(psych_id)
-                    p_local = utc_to_local(sched_str, p_offset)
-                    p_time = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%H:%M")
+                    p_tz, _ = await get_user_timezone(psych_id)
+                    p_time = to_user_tz(sched_str, p_tz, "%H:%M")
                     p_link = t(p_lang, "cs_link_line", link=link) if link else ""
                     await bot.send_message(
                         psych_id,
@@ -265,9 +266,8 @@ async def reminder_loop():
                     for member_tg in members:
                         try:
                             m_lang = await get_cohort_member_lang(member_tg)
-                            _, m_offset = await get_cohort_member_timezone(member_tg)
-                            m_local = utc_to_local(sched_str, m_offset)
-                            m_time = datetime.strptime(m_local, "%Y-%m-%d %H:%M").strftime("%H:%M")
+                            m_tz, _ = await get_cohort_member_timezone(member_tg)
+                            m_time = to_user_tz(sched_str, m_tz, "%H:%M")
                             m_link = t(m_lang, "cs_link_line", link=link) if link else ""
                             await bot.send_message(
                                 member_tg,
@@ -284,9 +284,8 @@ async def reminder_loop():
 
                 elif not r1h and timedelta(minutes=50) < delta <= timedelta(minutes=70):
                     p_lang = await get_user_lang(psych_id)
-                    _, p_offset = await get_user_timezone(psych_id)
-                    p_local = utc_to_local(sched_str, p_offset)
-                    p_time = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%H:%M")
+                    p_tz, _ = await get_user_timezone(psych_id)
+                    p_time = to_user_tz(sched_str, p_tz, "%H:%M")
                     p_link = t(p_lang, "cs_link_line", link=link) if link else ""
                     await bot.send_message(
                         psych_id,
@@ -296,9 +295,8 @@ async def reminder_loop():
                     for member_tg in members:
                         try:
                             m_lang = await get_cohort_member_lang(member_tg)
-                            _, m_offset = await get_cohort_member_timezone(member_tg)
-                            m_local = utc_to_local(sched_str, m_offset)
-                            m_time = datetime.strptime(m_local, "%Y-%m-%d %H:%M").strftime("%H:%M")
+                            m_tz, _ = await get_cohort_member_timezone(member_tg)
+                            m_time = to_user_tz(sched_str, m_tz, "%H:%M")
                             m_link = t(m_lang, "cs_link_line", link=link) if link else ""
                             await bot.send_message(
                                 member_tg,
@@ -399,9 +397,11 @@ async def notify_expiring_plans():
         try:
             # Fix 4: use t() with the user's own language instead of hardcoded RU
             lang = await get_user_lang(user_id)
+            p_tz, _ = await get_user_timezone(user_id)
+            date_display = to_user_tz(expires_at, p_tz, "%d.%m.%Y")
             await bot.send_message(
                 user_id,
-                t(lang, "plan_expiring_tomorrow", plan=plan, date=expires_at),
+                t(lang, "plan_expiring_tomorrow", plan=plan, date=date_display),
             )
             notified += 1
         except Exception as e:
@@ -462,4 +462,12 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Self-healing: ensure schema is current before the async event loop starts.
+    # Runs synchronously so any missing tables/columns are added before polling.
+    _guard_conn = sqlite3.connect(DB_PATH)
+    try:
+        ensure_db_schema(_guard_conn)
+    finally:
+        _guard_conn.close()
+
     asyncio.run(main())

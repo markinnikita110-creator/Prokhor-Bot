@@ -8,7 +8,15 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from database import DB_PATH, get_user_lang, resolve_client
+from database import DB_PATH, get_user_lang
+from core.db.clients_repository import resolve_client
+from core.services.notes import count_notes
+from core.services.checkins import (
+    get_all_scores,
+    get_all_scores_ordered,
+    get_max_checkin_timestamp,
+    get_positive_scores,
+)
 from keyboards import analytics_section_keyboard
 from translations import t
 from utils import engagement_label, smart_flags
@@ -28,11 +36,8 @@ async def _dashboard_text(psych_id: int, lang: str) -> str:
         return t(lang, "no_clients")
     blocks = []
     for client_id, name in clients:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute("SELECT COUNT(*) FROM notes WHERE client_id = ?", (client_id,))
-            note_count = (await cur.fetchone())[0]
-            cur = await db.execute("SELECT score FROM checkins WHERE client_id = ?", (client_id,))
-            scores = [r[0] for r in await cur.fetchall()]
+        note_count = await count_notes(client_id)
+        scores = [r[0] for r in await get_all_scores(client_id)]
         real = [s for s in scores if s > 0]
         avg_str = f"{sum(real)/len(real):.1f}" if real else "N/A"
         label = engagement_label(sum(real)/len(real), lang) if real else t(lang, "no_data")
@@ -42,7 +47,7 @@ async def _dashboard_text(psych_id: int, lang: str) -> str:
 
 
 async def _alerts_text(psych_id: int, lang: str) -> str:
-    now = datetime.now()
+    now = datetime.utcnow()
     cut_ci  = (now - timedelta(days=10)).strftime("%Y-%m-%d %H:%M")
     cut_ses = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M")
     async with aiosqlite.connect(DB_PATH) as db:
@@ -53,19 +58,15 @@ async def _alerts_text(psych_id: int, lang: str) -> str:
         clients = await cur.fetchall()
     alerts = []
     for client_id, name in clients:
+        scores = [r[0] for r in await get_positive_scores(client_id)]
+        if scores and (sum(scores)/len(scores)) < 4:
+            alerts.append(t(lang, "alert_low_score", client=name))
+
+        last_ci = await get_max_checkin_timestamp(client_id)
+        if not last_ci or last_ci < cut_ci:
+            alerts.append(t(lang, "alert_no_checkin", client=name))
+
         async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "SELECT score FROM checkins WHERE client_id = ? AND score > 0", (client_id,))
-            scores = [r[0] for r in await cur.fetchall()]
-            if scores and (sum(scores)/len(scores)) < 4:
-                alerts.append(t(lang, "alert_low_score", client=name))
-
-            cur = await db.execute(
-                "SELECT MAX(timestamp) FROM checkins WHERE client_id = ?", (client_id,))
-            last_ci = (await cur.fetchone())[0]
-            if not last_ci or last_ci < cut_ci:
-                alerts.append(t(lang, "alert_no_checkin", client=name))
-
             cur = await db.execute(
                 "SELECT MAX(scheduled_at) FROM sessions WHERE psychologist_id = ? AND client_name = ?",
                 (psych_id, name))
@@ -137,11 +138,8 @@ async def engagement_cmd(message: Message):
     if not client_id:
         await message.answer(t(lang, "client_not_found", name=client_name))
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT COUNT(*) FROM notes WHERE client_id = ?", (client_id,))
-        note_count = (await cur.fetchone())[0]
-        cur = await db.execute("SELECT score FROM checkins WHERE client_id = ? ORDER BY id", (client_id,))
-        scores = [r[0] for r in await cur.fetchall()]
+    note_count = await count_notes(client_id)
+    scores = [r[0] for r in await get_all_scores_ordered(client_id)]
     real = [s for s in scores if s > 0]
     avg_str = f"{sum(real)/len(real):.1f}" if real else "N/A"
     label = engagement_label(sum(real)/len(real), lang) if real else t(lang, "no_checkin_data")

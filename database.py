@@ -1,49 +1,69 @@
+import logging
 import secrets
-from datetime import datetime, timedelta, timezone as _tz
 
 import aiosqlite
+
+from core.utils.time import (  # noqa: F401 — re-exported for backward compatibility
+    format_offset,
+    local_to_utc,
+    now_str,
+    now_utc,
+    to_user_tz,
+    utc_to_local,
+)
+from core.db.clients_repository import (  # noqa: F401 — re-exported for backward compatibility
+    find_connected_client,
+    get_client_lang,
+    get_client_timezone,
+    get_cohort_member_lang,
+    get_cohort_member_timezone,
+    get_user_roles,
+    needs_tz_confirm_client,
+    reset_client_role,
+    resolve_client,
+    set_client_lang,
+    set_client_timezone,
+)
+
+_log = logging.getLogger(__name__)
+
+# ── Timezone: integer offset (minutes) → canonical IANA zone name ─────────
+# Used when a user selects a preset button so we store a proper IANA
+# identifier rather than a synthetic "UTC+3" string.
+OFFSET_TO_IANA: dict[int, str] = {
+    -600: "Pacific/Honolulu",
+    -540: "America/Anchorage",
+    -480: "America/Los_Angeles",
+    -420: "America/Denver",
+    -360: "America/Chicago",
+    -300: "America/New_York",
+    -240: "America/Halifax",
+    -180: "America/Sao_Paulo",
+    -120: "Atlantic/South_Georgia",
+     -60: "Atlantic/Azores",
+       0: "UTC",
+      60: "Europe/London",
+     120: "Europe/Kaliningrad",
+     180: "Europe/Moscow",
+     240: "Europe/Samara",
+     300: "Asia/Yekaterinburg",
+     330: "Asia/Kolkata",
+     360: "Asia/Omsk",
+     420: "Asia/Krasnoyarsk",
+     480: "Asia/Irkutsk",
+     540: "Asia/Yakutsk",
+     600: "Asia/Vladivostok",
+     660: "Asia/Magadan",
+     720: "Asia/Kamchatka",
+}
+
+_FALLBACK_TZ = "Europe/Moscow"
 
 DB_PATH = "prokhor.db"
 
 
 def _make_token() -> str:
     return "client_" + secrets.token_hex(4)
-
-
-def now_str() -> str:
-    """Current LOCAL time string — used only for display-only created_at fields."""
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
-
-
-def now_utc() -> str:
-    """Current UTC time string — used for all scheduling and reminder comparisons."""
-    return datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M")
-
-
-# ── Timezone helpers ───────────────────────────────────────────────────────
-
-def local_to_utc(dt_str: str, utc_offset_minutes: int) -> str:
-    """Convert 'YYYY-MM-DD HH:MM' in user's local time to UTC for storage."""
-    dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-    utc_dt = dt - timedelta(minutes=utc_offset_minutes)
-    return utc_dt.strftime("%Y-%m-%d %H:%M")
-
-
-def utc_to_local(dt_str: str, utc_offset_minutes: int) -> str:
-    """Convert 'YYYY-MM-DD HH:MM' UTC stored value to user's local time for display."""
-    dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-    local_dt = dt + timedelta(minutes=utc_offset_minutes)
-    return local_dt.strftime("%Y-%m-%d %H:%M")
-
-
-def format_offset(utc_offset_minutes: int) -> str:
-    """Format offset integer as 'UTC+3' or 'UTC-5:30'."""
-    sign = "+" if utc_offset_minutes >= 0 else "-"
-    total = abs(utc_offset_minutes)
-    hours, mins = divmod(total, 60)
-    if mins:
-        return f"UTC{sign}{hours}:{mins:02d}"
-    return f"UTC{sign}{hours}"
 
 
 async def init_db():
@@ -67,7 +87,8 @@ async def init_db():
                 language       TEXT DEFAULT 'en',
                 created_at     TEXT,
                 timezone       TEXT DEFAULT 'UTC',
-                utc_offset     INTEGER DEFAULT 0
+                utc_offset     INTEGER DEFAULT 0,
+                tz_confirmed   INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS clients (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +101,7 @@ async def init_db():
                 is_archived     INTEGER DEFAULT 0,
                 timezone        TEXT DEFAULT 'UTC',
                 utc_offset      INTEGER DEFAULT 0,
+                tz_confirmed    INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(psychologist_id, name)
             );
             CREATE TABLE IF NOT EXISTS notes (
@@ -465,78 +487,6 @@ async def ensure_user(user_id: int, username: str = "") -> bool:
         return False      # already known
 
 
-async def resolve_client(psychologist_id: int, name: str, create: bool = True):
-    """Return client_id. Optionally auto-create the client."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id FROM clients WHERE psychologist_id = ? AND name = ?",
-            (psychologist_id, name)
-        )
-        row = await cur.fetchone()
-        if row:
-            return row[0]
-        if create:
-            cur = await db.execute(
-                "INSERT INTO clients (psychologist_id, name, created_at, invite_token) VALUES (?, ?, ?, ?)",
-                (psychologist_id, name, now_str(), _make_token())
-            )
-            await db.commit()
-            return cur.lastrowid
-        return None
-
-
-async def find_connected_client(telegram_id: int):
-    """Return (client_id, name, psychologist_id) if this Telegram user is a connected client."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, name, psychologist_id FROM clients WHERE telegram_id = ?",
-            (telegram_id,)
-        )
-        return await cur.fetchone()
-
-
-async def get_user_roles(user_id: int) -> tuple:
-    """Return (is_psychologist, client_row) — both can be truthy at the same time.
-
-    is_psychologist : truthy row if user is registered in psychologists table.
-    client_row      : (id, name, psychologist_id) if user has a connected client record,
-                      None otherwise.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT 1 FROM psychologists WHERE user_id = ?", (user_id,)
-        )
-        is_psych = await cur.fetchone()
-        cur = await db.execute(
-            "SELECT id, name, psychologist_id FROM clients WHERE telegram_id = ?",
-            (user_id,)
-        )
-        client = await cur.fetchone()
-    return is_psych, client
-
-
-async def reset_client_role(telegram_id: int) -> bool:
-    """Disconnect this Telegram user from their client record.
-
-    Sets telegram_id = NULL on the client row so the psychologist's
-    client data (notes, sessions, homework) is preserved.
-    Returns True if a row was affected, False if the user had no client role.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id FROM clients WHERE telegram_id = ?", (telegram_id,)
-        )
-        row = await cur.fetchone()
-        if not row:
-            return False
-        await db.execute(
-            "UPDATE clients SET telegram_id = NULL WHERE telegram_id = ?",
-            (telegram_id,)
-        )
-        await db.commit()
-    return True
-
-
 async def get_user_timezone(user_id: int) -> tuple[str, int]:
     """Return (timezone_name, utc_offset_minutes) for a psychologist."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -549,36 +499,31 @@ async def get_user_timezone(user_id: int) -> tuple[str, int]:
     return ("UTC", 0)
 
 
-async def get_client_timezone(telegram_id: int) -> tuple[str, int]:
-    """Return (timezone_name, utc_offset_minutes) for a connected client."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT timezone, utc_offset FROM clients WHERE telegram_id = ?", (telegram_id,)
-        )
-        row = await cur.fetchone()
-    if row:
-        return (row[0] or "UTC", row[1] or 0)
-    return ("UTC", 0)
-
-
 async def set_user_timezone(user_id: int, tz_name: str, utc_offset_minutes: int):
-    """Persist psychologist's timezone."""
+    """Persist psychologist's timezone and mark it as explicitly confirmed."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE psychologists SET timezone = ?, utc_offset = ? WHERE user_id = ?",
+            "UPDATE psychologists SET timezone = ?, utc_offset = ?, tz_confirmed = 1"
+            " WHERE user_id = ?",
             (tz_name, utc_offset_minutes, user_id)
         )
         await db.commit()
 
 
-async def set_client_timezone(telegram_id: int, tz_name: str, utc_offset_minutes: int):
-    """Persist connected client's timezone."""
+async def needs_tz_confirm(user_id: int) -> bool:
+    """Return True if the psychologist still uses the default UTC and hasn't confirmed it.
+
+    Triggers the one-time 'please set your timezone' prompt in the main menu.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE clients SET timezone = ?, utc_offset = ? WHERE telegram_id = ?",
-            (tz_name, utc_offset_minutes, telegram_id)
+        cur = await db.execute(
+            "SELECT timezone, tz_confirmed FROM psychologists WHERE user_id = ?", (user_id,)
         )
-        await db.commit()
+        row = await cur.fetchone()
+    if not row:
+        return False
+    tz, confirmed = row
+    return (not tz or tz == "UTC") and not confirmed
 
 
 async def get_user_lang(user_id: int) -> str:
@@ -586,16 +531,6 @@ async def get_user_lang(user_id: int) -> str:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT language FROM psychologists WHERE user_id = ?", (user_id,)
-        )
-        row = await cur.fetchone()
-    return (row[0] or "en") if row else "en"
-
-
-async def get_client_lang(telegram_id: int) -> str:
-    """Return the connected client's language preference."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT language FROM clients WHERE telegram_id = ?", (telegram_id,)
         )
         row = await cur.fetchone()
     return (row[0] or "en") if row else "en"
@@ -610,50 +545,5 @@ async def set_user_lang(user_id: int, lang: str):
         await db.commit()
 
 
-async def set_client_lang(telegram_id: int, lang: str):
-    """Persist connected client's language choice."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE clients SET language = ? WHERE telegram_id = ?", (lang, telegram_id)
-        )
-        await db.commit()
-
-
 def make_token() -> str:
     return _make_token()
-
-
-async def get_cohort_member_lang(telegram_id: int) -> str:
-    """COHORT_SESSION: Language for a cohort member — checks clients then psychologists."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT language FROM clients WHERE telegram_id = ?", (telegram_id,)
-        )
-        row = await cur.fetchone()
-        if row and row[0]:
-            return row[0]
-        cur = await db.execute(
-            "SELECT language FROM psychologists WHERE user_id = ?", (telegram_id,)
-        )
-        row = await cur.fetchone()
-        if row and row[0]:
-            return row[0]
-    return "en"
-
-
-async def get_cohort_member_timezone(telegram_id: int) -> tuple[str, int]:
-    """COHORT_SESSION: Timezone for any user — checks clients then psychologists, falls back to UTC."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT timezone, utc_offset FROM clients WHERE telegram_id = ?", (telegram_id,)
-        )
-        row = await cur.fetchone()
-        if row and row[1] is not None:
-            return (row[0] or "UTC", row[1])
-        cur = await db.execute(
-            "SELECT timezone, utc_offset FROM psychologists WHERE user_id = ?", (telegram_id,)
-        )
-        row = await cur.fetchone()
-        if row and row[1] is not None:
-            return (row[0] or "UTC", row[1])
-    return ("UTC", 0)

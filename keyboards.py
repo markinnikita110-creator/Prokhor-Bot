@@ -12,13 +12,37 @@ from translations import TEXTS, t
 PAGE_SIZE = 8
 
 # ── Common timezone presets (offset_minutes, display_label) ───────────────
+# Labels use city names for Russian zones (primary audience per spec) and
+# plain UTC offsets for international zones.  Callback data is tz_set_{min}
+# so all existing handlers still work; OFFSET_TO_IANA converts minutes →
+# proper IANA name before any DB write.
 COMMON_TZ_OFFSETS: list[tuple[int, str]] = [
-    (-600, "UTC−10"), (-540, "UTC−9"), (-480, "UTC−8"), (-420, "UTC−7"),
-    (-360, "UTC−6"),  (-300, "UTC−5"), (-240, "UTC−4"), (-180, "UTC−3"),
-    (-120, "UTC−2"),  (-60,  "UTC−1"), (0,    "UTC"),   (60,   "UTC+1"),
-    (120,  "UTC+2"),  (180,  "UTC+3"), (240,  "UTC+4"), (300,  "UTC+5"),
-    (330,  "UTC+5:30"),(360, "UTC+6"), (420,  "UTC+7"), (480,  "UTC+8"),
-    (540,  "UTC+9"),  (600,  "UTC+10"),(660,  "UTC+11"),(720,  "UTC+12"),
+    # ── Россия ────────────────────────────────────────────────────────
+    ( 120, "Калининград (UTC+2)"),
+    ( 180, "Москва (UTC+3)"),
+    ( 240, "Самара (UTC+4)"),
+    ( 300, "Екатеринбург (UTC+5)"),
+    ( 360, "Омск (UTC+6)"),
+    ( 420, "Красноярск (UTC+7)"),
+    ( 480, "Иркутск (UTC+8)"),
+    ( 540, "Якутск (UTC+9)"),
+    ( 600, "Владивосток (UTC+10)"),
+    ( 660, "Магадан (UTC+11)"),
+    ( 720, "Камчатка (UTC+12)"),
+    # ── Международные ─────────────────────────────────────────────────
+    (-600, "UTC−10"),
+    (-540, "UTC−9"),
+    (-480, "UTC−8 (LA)"),
+    (-420, "UTC−7"),
+    (-360, "UTC−6 (Chicago)"),
+    (-300, "UTC−5 (NY)"),
+    (-240, "UTC−4"),
+    (-180, "UTC−3"),
+    (-120, "UTC−2"),
+    (-60,  "UTC−1"),
+    (   0, "UTC (London)"),
+    (  60, "UTC+1"),
+    ( 330, "UTC+5:30 (India)"),
 ]
 
 

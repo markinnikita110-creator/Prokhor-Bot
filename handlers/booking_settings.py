@@ -11,8 +11,7 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
 
-from database import DB_PATH, format_offset, get_user_lang, now_str
-from keyboards import cancel_keyboard, timezone_keyboard
+from database import DB_PATH, get_user_lang, now_str
 from states.booking_states import (
     BookingEditForm, BookingExceptionForm, BookingScheduleForm, BookingSetupForm,
 )
@@ -66,10 +65,17 @@ async def _unique_slug(db, base_slug: str, exclude_psych_id: int | None = None) 
 # ── Profile card helpers ─────────────────────────────────────────────────────
 
 async def _get_profile(psych_id: int):
+    """Return (slug, display_name, bio, timezone, booking_enabled).
+
+    timezone is always read from psychologists — the single source of truth.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT slug, display_name, bio, timezone, booking_enabled "
-            "FROM booking_profile WHERE psych_id = ?", (psych_id,))
+            "SELECT bp.slug, bp.display_name, bp.bio, "
+            "       COALESCE(p.timezone, 'UTC'), bp.booking_enabled "
+            "FROM booking_profile bp "
+            "LEFT JOIN psychologists p ON p.user_id = bp.psych_id "
+            "WHERE bp.psych_id = ?", (psych_id,))
         return await cur.fetchone()
 
 
@@ -88,9 +94,6 @@ def _profile_keyboard(psych_id: int, booking_enabled: int, lang: str) -> InlineK
                               callback_data=f"bk_edit_name_{psych_id}"),
          InlineKeyboardButton(text=t(lang, "btn_booking_edit_bio"),
                               callback_data=f"bk_edit_bio_{psych_id}")],
-        [InlineKeyboardButton(text=t(lang, "btn_booking_edit_tz"),
-                              callback_data=f"bk_edit_tz_{psych_id}")],
-        [InlineKeyboardButton(text=t(lang, "btn_main_menu"), callback_data="m_home")],
     ])
 
 
@@ -254,50 +257,26 @@ async def bk_setup_got_bio(message: Message, state: FSMContext):
                              reply_markup=cancel_keyboard(lang))
         return
     await state.update_data(bio=bio)
-    await state.set_state(BookingSetupForm.timezone)
-    await message.answer(t(lang, "ask_booking_timezone"),
-                         reply_markup=timezone_keyboard(lang))
-
-
-@router.callback_query(BookingSetupForm.timezone, F.data.regexp(r"^tz_set_-?\d+$"))
-async def bk_setup_tz_preset(callback: CallbackQuery, state: FSMContext):
-    offset_min = int(callback.data.split("_")[2])
-    tz_name = format_offset(offset_min)
     data = await state.get_data()
-    lang = data.get("lang", "en")
-    await state.update_data(tz_name=tz_name)
-    await _finish_setup(callback.message, state, data, tz_name, lang)
-    await callback.answer()
+    await _finish_setup(message, state, data, lang)
 
 
-@router.callback_query(BookingSetupForm.timezone, F.data == "tz_custom")
-async def bk_setup_tz_custom(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    lang = data.get("lang", "en")
-    await state.set_state(BookingSetupForm.timezone_custom)
-    await callback.answer()
-    await callback.message.answer(t(lang, "ask_timezone_custom"))
+async def _finish_setup(target, state: FSMContext, data: dict, lang: str):
+    """Finalise booking profile creation.
 
-
-@router.message(BookingSetupForm.timezone_custom)
-async def bk_setup_tz_text(message: Message, state: FSMContext):
-    from utils import parse_timezone
-    data = await state.get_data()
-    lang = data.get("lang", "en")
-    parsed = parse_timezone(message.text.strip())
-    if not parsed:
-        await message.answer(t(lang, "timezone_invalid"))
-        return
-    tz_name, _ = parsed
-    await _finish_setup(message, state, data, tz_name, lang)
-
-
-async def _finish_setup(target, state: FSMContext, data: dict, tz_name: str, lang: str):
+    Reads timezone from psychologists table (single source of truth) so the
+    booking profile never stores a diverging copy.
+    """
     psych_id = data["psych_id"]
     display_name = data["display_name"]
     bio = data["bio"]
     base_slug = _make_slug(display_name)
     async with aiosqlite.connect(DB_PATH) as db:
+        # Read the psychologist's already-validated timezone
+        cur = await db.execute(
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        tz_row = await cur.fetchone()
+        tz_name = tz_row[0] if tz_row and tz_row[0] else "UTC"
         slug = await _unique_slug(db, base_slug, exclude_psych_id=psych_id)
         await db.execute(
             "INSERT OR REPLACE INTO booking_profile "
@@ -311,7 +290,7 @@ async def _finish_setup(target, state: FSMContext, data: dict, tz_name: str, lan
         await target.answer(msg)
     except Exception:
         await target.message.answer(msg)
-    log.info("BOOKING: profile created psych_id=%d slug=%s", psych_id, slug)
+    log.info("BOOKING: profile created psych_id=%d slug=%s tz=%s", psych_id, slug, tz_name)
 
 
 # ── Profile card callback ──────────────────────────────────────────────────
@@ -420,65 +399,6 @@ async def bk_edit_bio_got(message: Message, state: FSMContext):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE booking_profile SET bio = ? WHERE psych_id = ?", (bio, psych_id))
-        await db.commit()
-    await state.clear()
-    await _send_profile_card(message, psych_id, lang)
-
-
-# ── Edit timezone ──────────────────────────────────────────────────────────
-
-@router.callback_query(F.data.regexp(r"^bk_edit_tz_\d+$"))
-async def bk_edit_tz_cb(callback: CallbackQuery, state: FSMContext):
-    psych_id = int(callback.data.split("_")[3])
-    lang = await get_user_lang(callback.from_user.id)
-    await callback.answer()
-    await state.update_data(psych_id=psych_id, lang=lang)
-    await state.set_state(BookingEditForm.timezone)
-    await callback.message.answer(t(lang, "ask_booking_timezone"),
-                                  reply_markup=timezone_keyboard(lang))
-
-
-@router.callback_query(BookingEditForm.timezone, F.data.regexp(r"^tz_set_-?\d+$"))
-async def bk_edit_tz_preset(callback: CallbackQuery, state: FSMContext):
-    offset_min = int(callback.data.split("_")[2])
-    tz_name = format_offset(offset_min)
-    data = await state.get_data()
-    lang = data.get("lang", "en")
-    psych_id = data["psych_id"]
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE booking_profile SET timezone = ? WHERE psych_id = ?",
-            (tz_name, psych_id))
-        await db.commit()
-    await state.clear()
-    await callback.answer()
-    await _send_profile_card(callback.message, psych_id, lang)
-
-
-@router.callback_query(BookingEditForm.timezone, F.data == "tz_custom")
-async def bk_edit_tz_custom(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    lang = data.get("lang", "en")
-    await state.set_state(BookingEditForm.timezone_custom)
-    await callback.answer()
-    await callback.message.answer(t(lang, "ask_timezone_custom"))
-
-
-@router.message(BookingEditForm.timezone_custom)
-async def bk_edit_tz_text(message: Message, state: FSMContext):
-    from utils import parse_timezone
-    data = await state.get_data()
-    lang = data.get("lang", "en")
-    psych_id = data["psych_id"]
-    parsed = parse_timezone(message.text.strip())
-    if not parsed:
-        await message.answer(t(lang, "timezone_invalid"))
-        return
-    tz_name, _ = parsed
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE booking_profile SET timezone = ? WHERE psych_id = ?",
-            (tz_name, psych_id))
         await db.commit()
     await state.clear()
     await _send_profile_card(message, psych_id, lang)

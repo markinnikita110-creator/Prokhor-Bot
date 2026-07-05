@@ -14,18 +14,23 @@ from aiogram.types import (
 
 from database import (
     DB_PATH,
+    OFFSET_TO_IANA,
     ensure_user,
-    find_connected_client,
     format_offset,
-    get_client_lang,
     get_user_lang,
-    get_user_roles,
     make_token,
+    needs_tz_confirm,
     now_str,
-    reset_client_role,
-    set_client_lang,
     set_user_lang,
     set_user_timezone,
+)
+from core.db.clients_repository import (
+    find_connected_client,
+    get_client_lang,
+    get_user_roles,
+    needs_tz_confirm_client,
+    reset_client_role,
+    set_client_lang,
 )
 from handlers.legal import (
     CONSENT_TEXT_RU, consent_keyboard,
@@ -181,6 +186,9 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
 
     if client_row and not is_psych:
         lang = await get_client_lang(uid)
+        if await needs_tz_confirm_client(uid):
+            await message.answer(t(lang, "tz_confirm_prompt"),
+                                 reply_markup=timezone_keyboard(lang))
         await message.answer(t(lang, "client_menu"))
         return
 
@@ -191,6 +199,9 @@ async def start_handler(message: Message, command: CommandObject, state: FSMCont
         log.info("New psychologist onboarding started: user_id=%d", uid)
         return
     lang = await get_user_lang(uid)
+    if await needs_tz_confirm(uid):
+        await message.answer(t(lang, "tz_confirm_prompt"),
+                             reply_markup=timezone_keyboard(lang))
     await message.answer(t(lang, "welcome"), reply_markup=main_menu_keyboard(lang))
     log.info("Psychologist started: user_id=%d", uid)
 
@@ -202,6 +213,9 @@ async def role_psych_cb(callback: CallbackQuery):
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
     await callback.answer()
+    if await needs_tz_confirm(uid):
+        await callback.message.answer(t(lang, "tz_confirm_prompt"),
+                                      reply_markup=timezone_keyboard(lang))
     await callback.message.answer(t(lang, "welcome"), reply_markup=main_menu_keyboard(lang))
     log.info("Switched to psychologist role: user_id=%d", uid)
 
@@ -211,6 +225,9 @@ async def role_client_cb(callback: CallbackQuery):
     uid = callback.from_user.id
     lang = await get_client_lang(uid)
     await callback.answer()
+    if await needs_tz_confirm_client(uid):
+        await callback.message.answer(t(lang, "tz_confirm_prompt"),
+                                      reply_markup=timezone_keyboard(lang))
     await callback.message.answer(t(lang, "client_menu"))
     log.info("Switched to client role: user_id=%d", uid)
 
@@ -283,16 +300,16 @@ async def onboarding_tz_set(callback: CallbackQuery, state: FSMContext):
     except ValueError:
         await callback.answer()
         return
-    tz_name = format_offset(offset_min)
+    tz_name = OFFSET_TO_IANA.get(offset_min, format_offset(offset_min))
     await set_user_timezone(uid, tz_name, offset_min)
     lang = await get_user_lang(uid)
     await state.clear()
     await callback.answer()
     await callback.message.answer(
-        t(lang, "timezone_saved", tz=tz_name, offset=tz_name) + "\n\n" + t(lang, "welcome"),
+        t(lang, "timezone_saved", tz=tz_name, offset=format_offset(offset_min)) + "\n\n" + t(lang, "welcome"),
         reply_markup=main_menu_keyboard(lang),
     )
-    log.info("Onboarding tz set: user_id=%d offset_min=%d", uid, offset_min)
+    log.info("Onboarding tz set: user_id=%d tz=%s", uid, tz_name)
 
 
 @router.callback_query(OnboardingForm.timezone, F.data == "tz_custom")
@@ -409,9 +426,13 @@ async def noop_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data == "m_home")
 async def main_menu_cb(callback: CallbackQuery, state: FSMContext):
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     await state.clear()
     await callback.answer()
+    if await needs_tz_confirm(uid):
+        await callback.message.answer(t(lang, "tz_confirm_prompt"),
+                                      reply_markup=timezone_keyboard(lang))
     await callback.message.answer(t(lang, "welcome"), reply_markup=main_menu_keyboard(lang))
 
 

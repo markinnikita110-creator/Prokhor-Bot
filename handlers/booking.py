@@ -11,10 +11,17 @@ from aiogram.types import (
 )
 
 from database import (
-    DB_PATH, format_offset, get_client_lang, get_user_lang, get_user_timezone,
-    now_str, now_utc, utc_to_local,
+    DB_PATH, OFFSET_TO_IANA, format_offset, get_client_lang, get_user_lang,
+    get_user_timezone, now_str, now_utc, to_user_tz, utc_to_local,
 )
 from keyboards import cancel_keyboard, timezone_keyboard
+from core.services.sessions import (
+    confirm_booking,
+    delete_session,
+    get_booked_slots_raw,
+    get_session_for_booking_decision,
+    insert_pending_booking_session,
+)
 from states.booking_states import BookingClientForm
 from translations import t
 
@@ -166,12 +173,7 @@ async def get_psych_tz_offset(tz_name: str) -> int:
 async def get_booked_slots(psych_id: int) -> set[str]:
     """Return UTC slot strings that are taken (confirmed or pending psych approval).
     Declined/deleted sessions are excluded so their slots reappear as free."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT scheduled_at FROM sessions WHERE psychologist_id = ? "
-            "AND (booking_status IN ('confirmed', 'pending_psych') OR booking_status IS NULL)",
-            (psych_id,))
-        return {row[0] for row in await cur.fetchall()}
+    return await get_booked_slots_raw(psych_id)
 
 
 async def get_client_tz_offset(telegram_id: int) -> tuple[str, int]:
@@ -283,7 +285,7 @@ async def bkc_tz_preset(callback: CallbackQuery, state: FSMContext):
     psych_id = data["psych_id"]
     lang = data.get("lang", "en")
     offset_min = int(callback.data.split("_")[2])
-    tz_name = format_offset(offset_min)
+    tz_name = OFFSET_TO_IANA.get(offset_min, format_offset(offset_min))
     await callback.answer()
     # Save timezone to all client records for this user
     async with aiosqlite.connect(DB_PATH) as db:
@@ -336,10 +338,10 @@ async def _show_booking_dates(target, psych_id: int, lang: str, client_offset: i
             "WHERE psych_id = ? AND type = 'blocked'", (psych_id,))
         exceptions = await cur.fetchall()
         cur = await db.execute(
-            "SELECT timezone FROM booking_profile WHERE psych_id = ?", (psych_id,))
-        profile_row = await cur.fetchone()
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        psych_row = await cur.fetchone()
 
-    psych_tz_name = profile_row[0] if profile_row else "UTC"
+    psych_tz_name = psych_row[0] if psych_row and psych_row[0] else "UTC"
     psych_offset = await get_psych_tz_offset(psych_tz_name)
     booked_utc = await get_booked_slots(psych_id)
 
@@ -391,10 +393,10 @@ async def bkc_date_cb(callback: CallbackQuery):
             "WHERE psych_id = ? AND type = 'blocked'", (psych_id,))
         exceptions = await cur.fetchall()
         cur = await db.execute(
-            "SELECT timezone FROM booking_profile WHERE psych_id = ?", (psych_id,))
-        profile_row = await cur.fetchone()
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        psych_row = await cur.fetchone()
 
-    psych_tz_name = profile_row[0] if profile_row else "UTC"
+    psych_tz_name = psych_row[0] if psych_row and psych_row[0] else "UTC"
     psych_offset = await get_psych_tz_offset(psych_tz_name)
     booked_utc = await get_booked_slots(psych_id)
     slots_utc = compute_available_slots(rules, exceptions, booked_utc, psych_offset)
@@ -440,9 +442,13 @@ async def bkc_slot_cb(callback: CallbackQuery):
 
     # Decode slot_compact → UTC string
     utc_str = f"{slot_compact[:4]}-{slot_compact[4:6]}-{slot_compact[6:8]} {slot_compact[9:11]}:{slot_compact[11:13]}"
-    utc_dt = datetime.strptime(utc_str, "%Y-%m-%d %H:%M")
-    local_dt = utc_dt + timedelta(minutes=client_offset)
-    display = local_dt.strftime("%d.%m.%Y %H:%M")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT timezone FROM clients WHERE telegram_id = ? LIMIT 1",
+            (callback.from_user.id,))
+        c_tz_row = await cur.fetchone()
+    client_tz = c_tz_row[0] if c_tz_row else None
+    display = to_user_tz(utc_str, client_tz, "%d.%m.%Y %H:%M")
 
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -491,10 +497,10 @@ async def bkc_slot_back_cb(callback: CallbackQuery):
             "WHERE psych_id = ? AND type = 'blocked'", (psych_id,))
         exceptions = await cur.fetchall()
         cur = await db.execute(
-            "SELECT timezone FROM booking_profile WHERE psych_id = ?", (psych_id,))
-        profile_row = await cur.fetchone()
+            "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
+        psych_row = await cur.fetchone()
 
-    psych_tz_name = profile_row[0] if profile_row else "UTC"
+    psych_tz_name = psych_row[0] if psych_row and psych_row[0] else "UTC"
     psych_offset = await get_psych_tz_offset(psych_tz_name)
     booked_utc = await get_booked_slots(psych_id)
     slots_utc = compute_available_slots(rules, exceptions, booked_utc, psych_offset)
@@ -542,9 +548,12 @@ async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
     await callback.answer()
 
     utc_str = f"{slot_compact[:4]}-{slot_compact[4:6]}-{slot_compact[6:8]} {slot_compact[9:11]}:{slot_compact[11:13]}"
-    utc_dt = datetime.strptime(utc_str, "%Y-%m-%d %H:%M")
-    local_dt = utc_dt + timedelta(minutes=client_offset)
-    display = local_dt.strftime("%d.%m.%Y %H:%M")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT timezone FROM clients WHERE telegram_id = ? LIMIT 1", (uid,))
+        c_tz_row = await cur.fetchone()
+    client_tz = c_tz_row[0] if c_tz_row else None
+    display = to_user_tz(utc_str, client_tz, "%d.%m.%Y %H:%M")
 
     # Rate limit: max 5 requests per client per 24h (across all psychologists)
     cutoff = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M")
@@ -580,14 +589,8 @@ async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
 
     # INSERT with UNIQUE constraint — slot may already be pending or confirmed
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "INSERT INTO sessions "
-                "(psychologist_id, client_name, scheduled_at, topic, booking_status) "
-                "VALUES (?, ?, ?, ?, 'pending_psych')",
-                (psych_id, client_name, utc_str, "self-booked"))
-            session_id = cur.lastrowid
-            await db.commit()
+        session_id = await insert_pending_booking_session(
+            psych_id, client_name, utc_str, "self-booked")
     except Exception as e:
         if "UNIQUE" in str(e).upper():
             await callback.message.answer(t(lang, "booking_slot_taken"))
@@ -616,9 +619,8 @@ async def bkc_confirm_cb(callback: CallbackQuery, bot: Bot):
 
     # Notify psychologist with Confirm / Reject buttons
     p_lang = await get_user_lang(psych_id)
-    _, p_offset = await get_user_timezone(psych_id)
-    p_local = utc_to_local(utc_str, p_offset)
-    p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    p_tz, _ = await get_user_timezone(psych_id)
+    p_display = to_user_tz(utc_str, p_tz, "%d.%m.%Y %H:%M")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text=t(p_lang, "btn_booking_approve"),
@@ -651,30 +653,22 @@ async def bkc_approve_cb(callback: CallbackQuery, bot: Bot):
     p_lang = await get_user_lang(psych_id)
     await callback.answer()
 
+    row = await get_session_for_booking_decision(session_id, psych_id)
+    if not row or row[2] != "pending_psych":
+        # Already handled (double tap or wrong session)
+        return
+    client_name, utc_str, _ = row
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "SELECT client_name, scheduled_at, booking_status FROM sessions "
-            "WHERE id = ? AND psychologist_id = ?",
-            (session_id, psych_id))
-        row = await cur.fetchone()
-        if not row or row[2] != "pending_psych":
-            # Already handled (double tap or wrong session)
-            return
-        client_name, utc_str, _ = row
-        cur = await db.execute(
-            "SELECT telegram_id, utc_offset FROM clients "
+            "SELECT telegram_id, timezone FROM clients "
             "WHERE psychologist_id = ? AND name = ?",
             (psych_id, client_name))
         client_row = await cur.fetchone()
-        await db.execute(
-            "UPDATE sessions SET booking_status = 'confirmed' WHERE id = ?",
-            (session_id,))
-        await db.commit()
+    await confirm_booking(session_id)
 
     # Update psych's notification message (remove buttons)
-    _, p_offset = await get_user_timezone(psych_id)
-    p_local = utc_to_local(utc_str, p_offset)
-    p_display = datetime.strptime(p_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+    p_tz, _ = await get_user_timezone(psych_id)
+    p_display = to_user_tz(utc_str, p_tz, "%d.%m.%Y %H:%M")
     try:
         await callback.message.edit_text(
             t(p_lang, "booking_psych_approved_notify",
@@ -685,10 +679,9 @@ async def bkc_approve_cb(callback: CallbackQuery, bot: Bot):
 
     # Notify client
     if client_row and client_row[0]:
-        client_tg, client_offset = client_row
+        client_tg, client_tz = client_row
         c_lang = await get_client_lang(client_tg)
-        c_local = utc_to_local(utc_str, client_offset)
-        c_display = datetime.strptime(c_local, "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+        c_display = to_user_tz(utc_str, client_tz, "%d.%m.%Y %H:%M")
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute(
                 "SELECT display_name FROM booking_profile WHERE psych_id = ?", (psych_id,))
@@ -715,23 +708,18 @@ async def bkc_reject_cb(callback: CallbackQuery, bot: Bot):
     psych_id = callback.from_user.id
     await callback.answer()
 
+    row = await get_session_for_booking_decision(session_id, psych_id)
+    if not row or row[2] != "pending_psych":
+        return
+    client_name, _, _ = row
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT client_name, scheduled_at, booking_status FROM sessions "
-            "WHERE id = ? AND psychologist_id = ?",
-            (session_id, psych_id))
-        row = await cur.fetchone()
-        if not row or row[2] != "pending_psych":
-            return
-        client_name, _, _ = row
         cur = await db.execute(
             "SELECT telegram_id, utc_offset FROM clients "
             "WHERE psychologist_id = ? AND name = ?",
             (psych_id, client_name))
         client_row = await cur.fetchone()
-        # Delete rejected request — slot is freed for other clients
-        await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        await db.commit()
+    # Delete rejected request — slot is freed for other clients
+    await delete_session(session_id)
 
     # Remove buttons from psych's notification message (keeps request text visible)
     try:
