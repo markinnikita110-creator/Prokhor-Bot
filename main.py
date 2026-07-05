@@ -19,16 +19,17 @@ from fsm_storage import SQLiteFSMStorage
 from database import (
     DB_PATH, get_user_lang,
     get_user_timezone,
-    init_db, migrate_db, now_str, to_user_tz, utc_to_local,
+    init_db, migrate_db, now_str, to_user_tz,
 )
 from core.db.clients_repository import (
-    get_client_lang, get_client_timezone, get_cohort_member_lang, get_cohort_member_timezone,
+    get_cohort_member_lang, get_cohort_member_timezone,
 )
 from db_guard import ensure_db_schema
 from handlers import routers
 from handlers.clients import set_bot_username
 from handlers.cohorts import generate_recurring_cohort_sessions  # RECURRING
 from handlers.legal import ConsentMiddleware
+from core.services.reminders import notify_expiring_plans, send_individual_reminders
 from translations import t
 
 BOT_START_TIME = datetime.utcnow()
@@ -137,93 +138,12 @@ async def reminder_loop():
             # ── Fix 3: notify users whose paid plan expires tomorrow ────────
             if _last_notify_date != today:
                 try:
-                    await notify_expiring_plans()
+                    await notify_expiring_plans(bot)
                 finally:
                     _last_notify_date = today
 
             # ── Individual session reminders ───────────────────────────────
-            async with aiosqlite.connect(DB_PATH) as db:
-                cur = await db.execute(
-                    "SELECT s.id, s.psychologist_id, s.client_name, s.scheduled_at, "
-                    "s.link, s.reminded_24h, s.reminded_1h, c.telegram_id "
-                    "FROM sessions s "
-                    "LEFT JOIN clients c ON c.psychologist_id = s.psychologist_id "
-                    "  AND c.name = s.client_name "
-                    "WHERE s.reminded_1h = 0 "
-                    "AND (s.booking_status = 'confirmed' OR s.booking_status IS NULL)"
-                )
-                sessions = await cur.fetchall()
-
-            for sid, psych_id, client_name, scheduled_at_str, link, r24, r1h, client_tg in sessions:
-                try:
-                    session_dt = datetime.strptime(scheduled_at_str, "%Y-%m-%d %H:%M")
-                except ValueError:
-                    continue
-                delta = session_dt - now
-                p_lang = await get_user_lang(psych_id)
-                p_tz, _ = await get_user_timezone(psych_id)
-                p_display = to_user_tz(scheduled_at_str, p_tz, "%H:%M")
-                link_line = t(p_lang, "session_link_line", link=link) if link else ""
-
-                # Fix 2: each send wrapped individually — one blocked/unavailable
-                # user no longer prevents reminders from reaching everyone else.
-                if not r24 and timedelta(hours=23) < delta <= timedelta(hours=25):
-                    try:
-                        await bot.send_message(
-                            psych_id,
-                            t(p_lang, "reminder_psych_24h",
-                              client=client_name, time=p_display) + link_line,
-                        )
-                    except Exception as e:
-                        log.warning("reminder 24h psych_id=%d sid=%d: %s", psych_id, sid, e)
-
-                    if client_tg:
-                        try:
-                            c_lang = await get_client_lang(client_tg)
-                            c_tz, _ = await get_client_timezone(client_tg)
-                            c_display = to_user_tz(scheduled_at_str, c_tz, "%H:%M")
-                            c_link = t(c_lang, "session_link_line", link=link) if link else ""
-                            await bot.send_message(
-                                client_tg,
-                                t(c_lang, "reminder_client_24h", time=c_display) + c_link,
-                            )
-                        except Exception as e:
-                            log.warning("reminder 24h client_tg=%d sid=%d: %s", client_tg, sid, e)
-
-                    # Mark sent regardless of per-recipient failures to avoid
-                    # duplicate spam on subsequent loop ticks.
-                    async with aiosqlite.connect(DB_PATH) as db:
-                        await db.execute(
-                            "UPDATE sessions SET reminded_24h = 1 WHERE id = ?", (sid,))
-                        await db.commit()
-
-                elif not r1h and timedelta(minutes=50) < delta <= timedelta(minutes=70):
-                    try:
-                        await bot.send_message(
-                            psych_id,
-                            t(p_lang, "reminder_psych_1h",
-                              client=client_name, time=p_display) + link_line,
-                        )
-                    except Exception as e:
-                        log.warning("reminder 1h psych_id=%d sid=%d: %s", psych_id, sid, e)
-
-                    if client_tg:
-                        try:
-                            c_lang = await get_client_lang(client_tg)
-                            c_tz, _ = await get_client_timezone(client_tg)
-                            c_display = to_user_tz(scheduled_at_str, c_tz, "%H:%M")
-                            c_link = t(c_lang, "session_link_line", link=link) if link else ""
-                            await bot.send_message(
-                                client_tg,
-                                t(c_lang, "reminder_client_1h", time=c_display) + c_link,
-                            )
-                        except Exception as e:
-                            log.warning("reminder 1h client_tg=%d sid=%d: %s", client_tg, sid, e)
-
-                    async with aiosqlite.connect(DB_PATH) as db:
-                        await db.execute(
-                            "UPDATE sessions SET reminded_1h = 1 WHERE id = ?", (sid,))
-                        await db.commit()
+            await send_individual_reminders(bot, now)
 
             # ── COHORT_SESSION: cohort session reminders ───────────────────
             async with aiosqlite.connect(DB_PATH) as db:
@@ -367,48 +287,6 @@ async def reminder_loop():
 
         except Exception as e:
             log.error("Reminder loop error: %s", e)
-
-
-# ── Fix 3+4: notify psychologists whose plan expires tomorrow ─────────────
-async def notify_expiring_plans():
-    """Send a reminder to every user whose paid plan expires tomorrow (UTC).
-
-    Uses datetime.utcnow() throughout — consistent with how reminder_loop
-    handles session scheduling.  expires_at values written before this fix
-    used local server time, but the window is a full calendar day so the
-    notification fires correctly even with a moderate timezone offset.
-    """
-    now = datetime.utcnow()
-    # Window: calendar day starting tomorrow (UTC midnight → midnight+1)
-    window_start = (now + timedelta(days=1)).strftime("%Y-%m-%d 00:00")
-    window_end   = (now + timedelta(days=2)).strftime("%Y-%m-%d 00:00")
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT user_id, plan, expires_at FROM user_plans "
-            "WHERE plan != 'start' AND expires_at IS NOT NULL "
-            "AND expires_at >= ? AND expires_at < ?",
-            (window_start, window_end),
-        )
-        rows = await cur.fetchall()
-
-    notified = 0
-    for user_id, plan, expires_at in rows:
-        try:
-            # Fix 4: use t() with the user's own language instead of hardcoded RU
-            lang = await get_user_lang(user_id)
-            p_tz, _ = await get_user_timezone(user_id)
-            date_display = to_user_tz(expires_at, p_tz, "%d.%m.%Y")
-            await bot.send_message(
-                user_id,
-                t(lang, "plan_expiring_tomorrow", plan=plan, date=date_display),
-            )
-            notified += 1
-        except Exception as e:
-            log.warning("notify_expiring_plans user_id=%d: %s", user_id, e)
-
-    if notified:
-        log.info("notify_expiring_plans: notified %d user(s)", notified)
 
 
 # ── Startup ────────────────────────────────────────────────────────────────
