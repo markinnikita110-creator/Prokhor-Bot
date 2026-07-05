@@ -16,6 +16,17 @@ from database import (
     to_user_tz,
 )
 from core.db.clients_repository import find_connected_client, get_client_lang, resolve_client
+from core.services.checkins import (
+    get_auto_checkin_client_names,
+    get_auto_checkins_for_psych,
+    get_last_n_checkins,
+    get_last_n_positive_checkins,
+    get_recent_checkins_for_psych,
+    insert_auto_checkin,
+    insert_manual_checkin,
+    update_auto_checkin_last_sent,
+    upsert_auto_checkin_config,
+)
 from keyboards import (
     cancel_keyboard,
     checkin_score_keyboard,
@@ -102,12 +113,7 @@ async def ci_got_score(message: Message, state: FSMContext):
     except ValueError:
         await message.answer(t(lang, "score_invalid"))
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO checkins (client_id, score, auto, timestamp) VALUES (?, ?, 0, ?)",
-            (client_id, score, now_str())
-        )
-        await db.commit()
+    await insert_manual_checkin(client_id, score, now_str())
     await message.answer(t(lang, "checkin_saved", client=client_name, score=score))
 
 
@@ -116,12 +122,7 @@ async def ci_got_score(message: Message, state: FSMContext):
 async def ci_auto_info(callback: CallbackQuery):
     lang = await get_user_lang(callback.from_user.id)
     await callback.answer()
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT client_name, interval_min FROM auto_checkins WHERE psychologist_id = ?",
-            (callback.from_user.id,)
-        )
-        rows = await cur.fetchall()
+    rows = await get_auto_checkins_for_psych(callback.from_user.id)
     if not rows:
         text = t(lang, "no_auto_checkins")
     else:
@@ -138,15 +139,7 @@ async def ci_auto_info(callback: CallbackQuery):
 async def ci_recent(callback: CallbackQuery):
     lang = await get_user_lang(callback.from_user.id)
     await callback.answer()
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT c.name, ci.score, ci.timestamp FROM checkins ci "
-            "JOIN clients c ON c.id = ci.client_id "
-            "WHERE c.psychologist_id = ? AND ci.score > 0 "
-            "ORDER BY ci.timestamp DESC LIMIT 10",
-            (callback.from_user.id,)
-        )
-        rows = await cur.fetchall()
+    rows = await get_recent_checkins_for_psych(callback.from_user.id, limit=10)
     if not rows:
         text = t(lang, "no_recent_checkins")
     else:
@@ -168,16 +161,12 @@ async def checkin_score_callback(callback: CallbackQuery, bot: Bot):
     parts = callback.data.split("_")
     client_id, score = int(parts[1]), int(parts[2])
     c_lang = await get_client_lang(callback.from_user.id)
+    await insert_manual_checkin(client_id, score, now_str())
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO checkins (client_id, score, auto, timestamp) VALUES (?, ?, 0, ?)",
-            (client_id, score, now_str())
-        )
         cur = await db.execute(
             "SELECT name, psychologist_id FROM clients WHERE id = ?", (client_id,)
         )
         row = await cur.fetchone()
-        await db.commit()
     await callback.answer(t(c_lang, "checkin_thanks"))
     if row:
         client_name, psych_id = row
@@ -205,12 +194,7 @@ async def checkin_cmd(message: Message):
         await message.answer(t(lang, "score_invalid"))
         return
     client_id = await resolve_client(message.from_user.id, client_name)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO checkins (client_id, score, auto, timestamp) VALUES (?, ?, 0, ?)",
-            (client_id, score, now_str())
-        )
-        await db.commit()
+    await insert_manual_checkin(client_id, score, now_str())
     await message.answer(t(lang, "checkin_saved", client=client_name, score=score))
 
 
@@ -226,12 +210,7 @@ async def checkins_cmd(message: Message):
     if not client_id:
         await message.answer(t(lang, "client_not_found", name=name))
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT score, timestamp FROM checkins WHERE client_id = ? ORDER BY id DESC LIMIT 5",
-            (client_id,)
-        )
-        rows = await cur.fetchall()
+    rows = await get_last_n_checkins(client_id, limit=5)
     if not rows:
         await message.answer(t(lang, "no_checkins", client=name))
         return
@@ -282,27 +261,14 @@ async def auto_checkin_cmd(message: Message):
     except ValueError:
         await message.answer(t(lang, "interval_invalid"))
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO auto_checkins (psychologist_id, client_name, interval_min, last_sent) "
-            "VALUES (?, ?, ?, NULL) "
-            "ON CONFLICT(psychologist_id, client_name) "
-            "DO UPDATE SET interval_min = excluded.interval_min, last_sent = NULL",
-            (message.from_user.id, client_name, interval)
-        )
-        await db.commit()
+    await upsert_auto_checkin_config(message.from_user.id, client_name, interval)
     await message.answer(t(lang, "auto_checkin_enabled", client=client_name, interval=interval))
 
 
 @router.message(Command("run_auto_checkins"))
 async def run_auto_checkins_cmd(message: Message):
     lang = await get_user_lang(message.from_user.id)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT client_name FROM auto_checkins WHERE psychologist_id = ?",
-            (message.from_user.id,)
-        )
-        configs = await cur.fetchall()
+    configs = await get_auto_checkin_client_names(message.from_user.id)
     if not configs:
         await message.answer(t(lang, "no_auto_checkins"))
         return
@@ -310,16 +276,8 @@ async def run_auto_checkins_cmd(message: Message):
     count = 0
     for (client_name,) in configs:
         client_id = await resolve_client(message.from_user.id, client_name)
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT INTO checkins (client_id, score, auto, timestamp) VALUES (?, 0, 1, ?)",
-                (client_id, timestamp)
-            )
-            await db.execute(
-                "UPDATE auto_checkins SET last_sent = ? WHERE psychologist_id = ? AND client_name = ?",
-                (timestamp, message.from_user.id, client_name)
-            )
-            await db.commit()
+        await insert_auto_checkin(client_id, timestamp)
+        await update_auto_checkin_last_sent(message.from_user.id, client_name, timestamp)
         count += 1
     await message.answer(t(lang, "auto_checkins_done", count=count))
 
@@ -372,13 +330,7 @@ async def checkin_history_cmd(message: Message):
         return
     client_id, _, _ = client_row
     lang = await get_client_lang(message.from_user.id)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT score, timestamp FROM checkins "
-            "WHERE client_id = ? AND score > 0 ORDER BY id DESC LIMIT 10",
-            (client_id,)
-        )
-        rows = await cur.fetchall()
+    rows = await get_last_n_positive_checkins(client_id, limit=10)
     if not rows:
         await message.answer(t(lang, "no_my_checkins"))
         return

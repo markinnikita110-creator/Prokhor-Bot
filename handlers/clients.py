@@ -30,6 +30,12 @@ from core.services.homework import (
     get_client_homeworks_created_text,
     get_client_homeworks_full,
 )
+from core.services.checkins import (
+    get_all_scores_ordered,
+    get_positive_checkins_timestamped,
+    get_positive_checkins_timestamped_ordered,
+    get_positive_scores,
+)
 from keyboards import (
     archived_list_keyboard,
     cancel_keyboard,
@@ -73,9 +79,7 @@ async def _client_card(client_id: int, psych_id: int, lang: str):
 
         notes = await count_notes(client_id)
 
-        cur = await db.execute(
-            "SELECT score FROM checkins WHERE client_id = ? AND score > 0", (client_id,))
-        scores = [r[0] for r in await cur.fetchall()]
+        scores = [r[0] for r in await get_positive_scores(client_id)]
 
         now_dt = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
         cur = await db.execute(
@@ -439,12 +443,10 @@ async def _build_timeline(client_id: int, psych_id: int, client_name: str, lang:
     for ts, text in await get_client_homeworks_created_text(client_id):
         events.append((ts, t(lang, "timeline_homework", text=text[:60])))
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT timestamp, score FROM checkins WHERE client_id = ? AND score > 0", (client_id,))
-        for ts, score in await cur.fetchall():
-            events.append((ts, t(lang, "timeline_checkin", score=score)))
+    for ts, score in await get_positive_checkins_timestamped(client_id):
+        events.append((ts, t(lang, "timeline_checkin", score=score)))
 
+    async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT scheduled_at FROM sessions WHERE psychologist_id = ? AND client_name = ?",
             (psych_id, client_name))
@@ -472,10 +474,7 @@ async def _build_timeline(client_id: int, psych_id: int, client_name: str, lang:
 
 async def _build_engagement(client_id: int, client_name: str, lang: str) -> str:
     note_count = await count_notes(client_id)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT score FROM checkins WHERE client_id = ? ORDER BY id", (client_id,))
-        scores = [r[0] for r in await cur.fetchall()]
+    scores = [r[0] for r in await get_all_scores_ordered(client_id)]
     real = [s for s in scores if s > 0]
     avg_str = f"{sum(real)/len(real):.1f}" if real else "N/A"
     label = engagement_label(sum(real)/len(real), lang) if real else t(lang, "no_checkin_data")
@@ -490,12 +489,8 @@ async def _fetch_client_data(client_id: int, psych_id: int, client_name: str) ->
     data: dict = {"notes": [], "checkins": [], "homeworks": [], "sessions": []}
     data["notes"] = await get_notes_full(client_id)
     data["homeworks"] = await get_client_homeworks_full(client_id)
+    data["checkins"] = await get_positive_checkins_timestamped_ordered(client_id)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT timestamp, score FROM checkins WHERE client_id = ? AND score > 0 ORDER BY id",
-            (client_id,))
-        data["checkins"] = await cur.fetchall()
-
         cur = await db.execute(
             "SELECT scheduled_at, link FROM sessions "
             "WHERE psychologist_id = ? AND client_name = ? ORDER BY scheduled_at",
