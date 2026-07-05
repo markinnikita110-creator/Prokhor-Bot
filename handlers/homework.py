@@ -12,6 +12,11 @@ from aiogram import Bot
 
 from database import DB_PATH, get_user_lang, now_str
 from core.db.clients_repository import get_client_lang, resolve_client
+from core.services.homework import (
+    assign_homework,
+    get_active_homework_for_psych,
+    get_client_homeworks,
+)
 from keyboards import cancel_keyboard, homework_section_keyboard
 from states import AssignHomeworkForm, AssignHomeworkFromCardForm
 from translations import t
@@ -79,15 +84,7 @@ async def hw_card_got_text(message: Message, state: FSMContext, bot: Bot):
 async def hw_list(callback: CallbackQuery):
     lang = await get_user_lang(callback.from_user.id)
     await callback.answer()
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT c.name, h.text FROM homeworks h "
-            "JOIN clients c ON c.id = h.client_id "
-            "WHERE c.psychologist_id = ? AND h.completed = 0 AND c.is_archived = 0 "
-            "ORDER BY h.id DESC LIMIT 30",
-            (callback.from_user.id,)
-        )
-        rows = await cur.fetchall()
+    rows = await get_active_homework_for_psych(callback.from_user.id)
     if not rows:
         text = t(lang, "no_active_homework")
     else:
@@ -114,16 +111,9 @@ async def _save_and_send_homework(psych_id: int, client_name: str, hw_text: str,
         client_id = await resolve_client(psych_id, client_name)
         client_tg = None
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO homeworks (client_id, text, created_at) VALUES (?, ?, ?)",
-            (client_id, hw_text, now_str())
-        )
-        await db.commit()
+    notified = await assign_homework(client_id, client_tg, hw_text, now_str(), bot)
 
-    if client_tg and bot:
-        c_lang = await get_client_lang(client_tg)
-        await bot.send_message(client_tg, t(c_lang, "new_homework_client", text=hw_text))
+    if notified:
         await message.answer(t(lang, "homework_sent", client=client_name))
     else:
         await message.answer(t(lang, "homework_saved_offline", client=client_name))
@@ -153,11 +143,7 @@ async def homeworks_cmd(message: Message):
     if not client_id:
         await message.answer(t(lang, "client_not_found", name=client_name))
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT text, completed FROM homeworks WHERE client_id = ? ORDER BY id", (client_id,)
-        )
-        rows = await cur.fetchall()
+    rows = await get_client_homeworks(client_id)
     if not rows:
         await message.answer(t(lang, "no_homework", client=client_name))
         return
@@ -174,11 +160,7 @@ async def my_homeworks_cmd(message: Message):
         return
     client_id, _, _ = client_row
     lang = await get_client_lang(message.from_user.id)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT text, completed FROM homeworks WHERE client_id = ? ORDER BY id", (client_id,)
-        )
-        rows = await cur.fetchall()
+    rows = await get_client_homeworks(client_id)
     if not rows:
         await message.answer(t(lang, "no_my_homeworks"))
         return
