@@ -525,7 +525,7 @@ async def cv2_recurring_schedule(callback: CallbackQuery, state: FSMContext):
     """RECURRING: cv2_rsched shortcut — jump straight into day-of-week picking."""
     cid = int(callback.data[len("cv2_rsched_"):])
     lang = await get_user_lang(callback.from_user.id)
-    await state.update_data(cohort_id=cid, days=set())
+    await state.update_data(cohort_id=cid, days=[])
     await state.set_state(CohortRecurringScheduleForm.days)
     await callback.answer()
     await callback.message.answer(
@@ -538,7 +538,7 @@ async def cv2_recurring_schedule(callback: CallbackQuery, state: FSMContext):
 async def cr_got_cohort(callback: CallbackQuery, state: FSMContext):
     lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("crsch_coh_"):])
-    await state.update_data(cohort_id=cohort_id, days=set())
+    await state.update_data(cohort_id=cohort_id, days=[])
     await state.set_state(CohortRecurringScheduleForm.days)
     await callback.answer()
     await callback.message.answer(
@@ -569,12 +569,12 @@ async def cr_toggle_day(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     data = await state.get_data()
-    days = set(data.get("days", set()))
+    days = set(data.get("days", []))
     if day_idx in days:
         days.discard(day_idx)
     else:
         days.add(day_idx)
-    await state.update_data(days=days)
+    await state.update_data(days=list(days))
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=cohort_recurring_days_keyboard(days, lang))
 
