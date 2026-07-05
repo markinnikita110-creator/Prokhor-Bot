@@ -12,6 +12,18 @@ from aiogram.types import (
 )
 
 from database import DB_PATH, get_user_lang, get_user_timezone, local_to_utc, to_user_tz, utc_to_local
+from core.services.sessions import (
+    delete_recurring_sessions_for_client,
+    delete_session,
+    get_session_full,
+    get_sessions_for_client,
+    insert_oneoff_session,
+    insert_recurring_session,
+    session_exists_at,
+    update_session_datetime,
+    update_session_link,
+    update_session_topic,
+)
 from keyboards import (
     client_session_list_keyboard,
     client_session_detail_keyboard,
@@ -67,25 +79,11 @@ async def _get_client_by_name(psych_id: int, client_name: str):
 
 async def _get_sessions_for_client(psych_id: int, client_name: str) -> list:
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, scheduled_at, topic, link, recurring, days_of_week "
-            "FROM sessions "
-            "WHERE psychologist_id = ? AND client_name = ? "
-            "AND (recurring = 1 OR scheduled_at >= ?) "
-            "ORDER BY recurring DESC, scheduled_at ASC",
-            (psych_id, client_name, now_str))
-        return await cur.fetchall()
+    return await get_sessions_for_client(psych_id, client_name, now_str)
 
 
 async def _get_session(session_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, psychologist_id, client_name, scheduled_at, "
-            "topic, link, recurring, days_of_week "
-            "FROM sessions WHERE id = ?",
-            (session_id,))
-        return await cur.fetchone()
+    return await get_session_full(session_id)
 
 
 # ── Label helpers ──────────────────────────────────────────────────────────
@@ -119,25 +117,15 @@ async def _generate_upcoming(psych_id: int, client_name: str,
     now = datetime.utcnow()
     horizon = now + timedelta(days=30)
     check_date = now.date()
-    async with aiosqlite.connect(DB_PATH) as db:
-        while check_date <= horizon.date():
-            if check_date.weekday() in selected_days:
-                local_dt_str = f"{check_date.strftime('%Y-%m-%d')} {time_local}"
-                utc_str = local_to_utc(local_dt_str, offset_min)
-                dt_utc = datetime.strptime(utc_str, "%Y-%m-%d %H:%M")
-                if dt_utc > now:
-                    cur = await db.execute(
-                        "SELECT 1 FROM sessions WHERE psychologist_id = ? "
-                        "AND client_name = ? AND scheduled_at = ? AND recurring = 0",
-                        (psych_id, client_name, utc_str))
-                    if not await cur.fetchone():
-                        await db.execute(
-                            "INSERT INTO sessions "
-                            "(psychologist_id, client_name, scheduled_at, topic, link) "
-                            "VALUES (?, ?, ?, ?, ?)",
-                            (psych_id, client_name, utc_str, topic, link))
-            check_date += timedelta(days=1)
-        await db.commit()
+    while check_date <= horizon.date():
+        if check_date.weekday() in selected_days:
+            local_dt_str = f"{check_date.strftime('%Y-%m-%d')} {time_local}"
+            utc_str = local_to_utc(local_dt_str, offset_min)
+            dt_utc = datetime.strptime(utc_str, "%Y-%m-%d %H:%M")
+            if dt_utc > now:
+                if not await session_exists_at(psych_id, client_name, utc_str):
+                    await insert_oneoff_session(psych_id, client_name, utc_str, topic, link)
+        check_date += timedelta(days=1)
 
 
 # ── Shared render helpers ──────────────────────────────────────────────────
@@ -243,10 +231,7 @@ async def edit_dt_save(msg: Message, state: FSMContext):
         return
     data = await state.get_data()
     utc_str = local_to_utc(msg.text.strip(), offset)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE sessions SET scheduled_at = ? WHERE id = ?",
-                         (utc_str, data["session_id"]))
-        await db.commit()
+    await update_session_datetime(data["session_id"], utc_str)
     await state.clear()
     await msg.answer(t(lang, "is_updated_dt"))
 
@@ -271,9 +256,7 @@ async def edit_topic_start(cb: CallbackQuery, state: FSMContext):
 async def edit_topic_clear(cb: CallbackQuery, state: FSMContext):
     lang = await _lang(cb.from_user.id)
     data = await state.get_data()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE sessions SET topic = '' WHERE id = ?", (data["session_id"],))
-        await db.commit()
+    await update_session_topic(data["session_id"], "")
     await state.clear()
     await cb.message.edit_text(t(lang, "is_updated_topic"))
     await cb.answer()
@@ -283,10 +266,7 @@ async def edit_topic_clear(cb: CallbackQuery, state: FSMContext):
 async def edit_topic_save(msg: Message, state: FSMContext):
     lang = await _lang(msg.from_user.id)
     data = await state.get_data()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE sessions SET topic = ? WHERE id = ?",
-                         (msg.text.strip(), data["session_id"]))
-        await db.commit()
+    await update_session_topic(data["session_id"], msg.text.strip())
     await state.clear()
     await msg.answer(t(lang, "is_updated_topic"))
 
@@ -311,9 +291,7 @@ async def edit_link_start(cb: CallbackQuery, state: FSMContext):
 async def edit_link_clear(cb: CallbackQuery, state: FSMContext):
     lang = await _lang(cb.from_user.id)
     data = await state.get_data()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE sessions SET link = '' WHERE id = ?", (data["session_id"],))
-        await db.commit()
+    await update_session_link(data["session_id"], "")
     await state.clear()
     await cb.message.edit_text(t(lang, "is_updated_link"))
     await cb.answer()
@@ -323,10 +301,7 @@ async def edit_link_clear(cb: CallbackQuery, state: FSMContext):
 async def edit_link_save(msg: Message, state: FSMContext):
     lang = await _lang(msg.from_user.id)
     data = await state.get_data()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE sessions SET link = ? WHERE id = ?",
-                         (msg.text.strip(), data["session_id"]))
-        await db.commit()
+    await update_session_link(data["session_id"], msg.text.strip())
     await state.clear()
     await msg.answer(t(lang, "is_updated_link"))
 
@@ -362,9 +337,7 @@ async def delete_session_confirm(cb: CallbackQuery):
     if sess:
         client = await _get_client_by_name(sess[1], sess[2])
         client_id = client[0] if client else 0
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        await db.commit()
+    await delete_session(session_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "is_btn_back_list"),
                              callback_data=f"ics_{client_id}" if client_id else "menu_individual")
@@ -430,11 +403,11 @@ async def delete_rule_confirm(cb: CallbackQuery):
     if sess:
         client = await _get_client_by_name(sess[1], sess[2])
         client_id = client[0] if client else 0
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-            if client_id:
+        await delete_session(session_id)
+        if client_id:
+            async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute("UPDATE clients SET recurring_paused = 0 WHERE id = ?", (client_id,))
-            await db.commit()
+                await db.commit()
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "is_btn_back_list"),
                              callback_data=f"ics_{client_id}" if client_id else "menu_individual")
@@ -526,13 +499,7 @@ async def _save_oneoff(trigger, state: FSMContext):
     scheduled_at = data["scheduled_at"]
     topic = data.get("topic", "")
     link = data.get("link", "")
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO sessions "
-            "(psychologist_id, client_name, scheduled_at, topic, link) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (psych_id, client_name, scheduled_at, topic, link))
-        await db.commit()
+    await insert_oneoff_session(psych_id, client_name, scheduled_at, topic, link)
     date_display = to_user_tz(scheduled_at, tz_name, "%d %b %Y · %H:%M")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t(lang, "is_btn_back_list"), callback_data=f"ics_{client_id}")
@@ -673,15 +640,9 @@ async def _save_recurring(trigger, state: FSMContext):
     days_csv = ",".join(str(d) for d in selected_days)
     dow_labels = [t(lang, _DOW_KEYS[d]) for d in selected_days]
 
+    await delete_recurring_sessions_for_client(psych_id, client_name)
+    await insert_recurring_session(psych_id, client_name, utc_template, topic, link, days_csv)
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "DELETE FROM sessions WHERE psychologist_id = ? AND client_name = ? AND recurring = 1",
-            (psych_id, client_name))
-        await db.execute(
-            "INSERT INTO sessions "
-            "(psychologist_id, client_name, scheduled_at, topic, link, recurring, days_of_week) "
-            "VALUES (?, ?, ?, ?, ?, 1, ?)",
-            (psych_id, client_name, utc_template, topic, link, days_csv))
         await db.execute("UPDATE clients SET recurring_paused = 0 WHERE id = ?", (client_id,))
         await db.commit()
 
