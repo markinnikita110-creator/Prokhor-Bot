@@ -131,15 +131,17 @@ async def reminder_loop():
                 try:
                     await generate_recurring_cohort_sessions()
                     await generate_recurring_individual_sessions()  # RECURRING_IND
-                finally:
-                    _last_recurring_gen_date = today
+                    _last_recurring_gen_date = today  # only mark done on success
+                except Exception as e:
+                    log.error("RECURRING: session generation failed: %s", e)
 
             # ── Fix 3: notify users whose paid plan expires tomorrow ────────
             if _last_notify_date != today:
                 try:
                     await notify_expiring_plans()
-                finally:
-                    _last_notify_date = today
+                    _last_notify_date = today  # only mark done on success
+                except Exception as e:
+                    log.error("notify_expiring_plans failed: %s", e)
 
             # ── Individual session reminders ───────────────────────────────
             async with aiosqlite.connect(DB_PATH) as db:
@@ -258,11 +260,14 @@ async def reminder_loop():
                     p_tz, _ = await get_user_timezone(psych_id)
                     p_time = to_user_tz(sched_str, p_tz, "%H:%M")
                     p_link = t(p_lang, "cs_link_line", link=link) if link else ""
-                    await bot.send_message(
-                        psych_id,
-                        t(p_lang, "cs_reminder_psych_24h",
-                          num=sess_num, cohort=cohort_name, time=p_time) + p_link,
-                    )
+                    try:
+                        await bot.send_message(
+                            psych_id,
+                            t(p_lang, "cs_reminder_psych_24h",
+                              num=sess_num, cohort=cohort_name, time=p_time, link_line=p_link),
+                        )
+                    except Exception as e:
+                        log.warning("COHORT_SESSION: 24h remind fail psych_id=%d: %s", psych_id, e)
                     for member_tg in members:
                         try:
                             m_lang = await get_cohort_member_lang(member_tg)
@@ -272,7 +277,7 @@ async def reminder_loop():
                             await bot.send_message(
                                 member_tg,
                                 t(m_lang, "cs_reminder_24h",
-                                  num=sess_num, cohort=cohort_name, time=m_time) + m_link,
+                                  num=sess_num, cohort=cohort_name, time=m_time, link_line=m_link),
                             )
                         except Exception as e:
                             log.warning("COHORT_SESSION: 24h remind fail member_tg=%d: %s", member_tg, e)
@@ -287,11 +292,14 @@ async def reminder_loop():
                     p_tz, _ = await get_user_timezone(psych_id)
                     p_time = to_user_tz(sched_str, p_tz, "%H:%M")
                     p_link = t(p_lang, "cs_link_line", link=link) if link else ""
-                    await bot.send_message(
-                        psych_id,
-                        t(p_lang, "cs_reminder_psych_1h",
-                          num=sess_num, cohort=cohort_name, time=p_time) + p_link,
-                    )
+                    try:
+                        await bot.send_message(
+                            psych_id,
+                            t(p_lang, "cs_reminder_psych_1h",
+                              num=sess_num, cohort=cohort_name, time=p_time, link_line=p_link),
+                        )
+                    except Exception as e:
+                        log.warning("COHORT_SESSION: 1h remind fail psych_id=%d: %s", psych_id, e)
                     for member_tg in members:
                         try:
                             m_lang = await get_cohort_member_lang(member_tg)
@@ -301,7 +309,7 @@ async def reminder_loop():
                             await bot.send_message(
                                 member_tg,
                                 t(m_lang, "cs_reminder_1h",
-                                  num=sess_num, cohort=cohort_name, time=m_time) + m_link,
+                                  num=sess_num, cohort=cohort_name, time=m_time, link_line=m_link),
                             )
                         except Exception as e:
                             log.warning("COHORT_SESSION: 1h remind fail member_tg=%d: %s", member_tg, e)
