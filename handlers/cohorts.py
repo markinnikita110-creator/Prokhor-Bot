@@ -422,8 +422,13 @@ async def cohort_schedule_start(message: Message, state: FSMContext):
 async def cs_got_cohort(callback: CallbackQuery, state: FSMContext):
     """SESSIONS: session number is auto-assigned (next in sequence) — no manual
     entry required, straight to picking the date/time."""
-    lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("csch_coh_"):])
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cohort_id, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted csch on cohort_id=%d (not owner)", uid, cohort_id)
+        await callback.answer()
+        return
     existing = await _get_cohort_sessions(cohort_id)
     next_num = max((row[1] for row in existing), default=0) + 1
     await state.update_data(cohort_id=cohort_id, session_number=next_num)
@@ -645,8 +650,13 @@ async def cv2_recurring_schedule(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(CohortRecurringScheduleForm.cohort, F.data.startswith("crsch_coh_"))
 async def cr_got_cohort(callback: CallbackQuery, state: FSMContext):
-    lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("crsch_coh_"):])
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cohort_id, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted crsch on cohort_id=%d (not owner)", uid, cohort_id)
+        await callback.answer()
+        return
     await state.update_data(cohort_id=cohort_id, days=set())
     await state.set_state(CohortRecurringScheduleForm.days)
     await callback.answer()
@@ -860,8 +870,13 @@ async def cohort_attendance_start(message: Message, state: FSMContext):
 
 @router.callback_query(CohortAttendanceForm.cohort, F.data.startswith("catt_coh_"))
 async def catt_got_cohort(callback: CallbackQuery, state: FSMContext):
-    lang = await get_user_lang(callback.from_user.id)
     cohort_id = int(callback.data[len("catt_coh_"):])
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cohort_id, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted catt_coh on cohort_id=%d (not owner)", uid, cohort_id)
+        await callback.answer()
+        return
     sessions = await _get_scheduled_sessions(cohort_id)
     await callback.answer()
     if not sessions:
@@ -884,7 +899,8 @@ async def catt_got_cohort(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(CohortAttendanceForm.session, F.data.startswith("catt_ses_"))
 async def catt_got_session(callback: CallbackQuery, state: FSMContext):
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     session_id = int(callback.data[len("catt_ses_"):])
     row = await _get_cohort_for_session(session_id)
     if not row:
@@ -892,6 +908,11 @@ async def catt_got_session(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
     cohort_id, cohort_name, session_num = row
+    if await verify_cohort_owner(cohort_id, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted catt_ses on cohort_id=%d (not owner)", uid, cohort_id)
+        await callback.answer()
+        await state.clear()
+        return
     await state.clear()
     await callback.answer()
     header, kb = await _attendance_kb(session_id, cohort_id, lang)
@@ -1216,10 +1237,15 @@ async def csd_session_detail(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("csdt_"))
 async def csdt_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("csdt_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_session(session_id)
-    if not row or await verify_cohort_owner(row[1], callback.from_user.id) is None:
-        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+    if not row:
+        await callback.answer()
+        return
+    if await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted csdt on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
         return
     await state.update_data(session_id=session_id, cohort_id=row[1])
     await state.set_state(CohortSessionEditForm.datetime_)
@@ -1255,10 +1281,15 @@ async def csdt_got_value(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cstp_"))
 async def cstp_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("cstp_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_session(session_id)
-    if not row or await verify_cohort_owner(row[1], callback.from_user.id) is None:
-        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+    if not row:
+        await callback.answer()
+        return
+    if await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted cstp on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
         return
     await state.update_data(session_id=session_id, cohort_id=row[1])
     await state.set_state(CohortSessionEditForm.topic)
@@ -1282,10 +1313,15 @@ async def cstp_got_value(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cslk_"))
 async def cslk_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("cslk_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_session(session_id)
-    if not row or await verify_cohort_owner(row[1], callback.from_user.id) is None:
-        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+    if not row:
+        await callback.answer()
+        return
+    if await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted cslk on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
         return
     await state.update_data(session_id=session_id, cohort_id=row[1])
     await state.set_state(CohortSessionEditForm.link)
@@ -1333,10 +1369,15 @@ async def _finish_field_edit(source, state: FSMContext, field: str, value: str, 
 @router.callback_query(F.data.startswith("csdl_"))
 async def csdl_ask(callback: CallbackQuery):
     session_id = int(callback.data[len("csdl_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_session(session_id)
-    if not row or await verify_cohort_owner(row[1], callback.from_user.id) is None:
-        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+    if not row:
+        await callback.answer()
+        return
+    if await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted csdl on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
         return
     _, _cid, num, sched_utc, *_ = row
     p_tz, _ = await get_user_timezone(callback.from_user.id)
@@ -1350,10 +1391,15 @@ async def csdl_ask(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("csdy_"))
 async def csdy_confirm(callback: CallbackQuery):
     session_id = int(callback.data[len("csdy_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_session(session_id)
-    if not row or await verify_cohort_owner(row[1], callback.from_user.id) is None:
-        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+    if not row:
+        await callback.answer()
+        return
+    if await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted csdy on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
         return
     _, cohort_id, num, *_ = row
     await _delete_cohort_session(session_id)
@@ -1381,10 +1427,15 @@ async def csdn_cancel(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cspz_"))
 async def cspz_toggle(callback: CallbackQuery):
     session_id = int(callback.data[len("cspz_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_session(session_id)
-    if not row or await verify_cohort_owner(row[1], callback.from_user.id) is None:
-        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+    if not row:
+        await callback.answer()
+        return
+    if await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted cspz on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
         return
     cohort_id = row[1]
     cohort_name = await get_cohort_name(cohort_id)
@@ -1408,10 +1459,15 @@ async def cspz_toggle(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("csrl_"))
 async def csrl_ask(callback: CallbackQuery):
     session_id = int(callback.data[len("csrl_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_session(session_id)
-    if not row or await verify_cohort_owner(row[1], callback.from_user.id) is None:
-        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+    if not row:
+        await callback.answer()
+        return
+    if await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted csrl on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
         return
     cohort_id = row[1]
     cohort_name = await get_cohort_name(cohort_id)
@@ -1424,10 +1480,15 @@ async def csrl_ask(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("csry_"))
 async def csry_confirm(callback: CallbackQuery):
     session_id = int(callback.data[len("csry_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_session(session_id)
-    if not row or await verify_cohort_owner(row[1], callback.from_user.id) is None:
-        await callback.answer(t(lang, "cs2_not_found"), show_alert=True)
+    if not row:
+        await callback.answer()
+        return
+    if await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted csry on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
         return
     cohort_id = row[1]
     cohort_name = await get_cohort_name(cohort_id)
@@ -1647,8 +1708,14 @@ async def cci_response(callback: CallbackQuery):
     if len(parts) != 3:
         await callback.answer()
         return
-    cohort_id, _member_tg, score = int(parts[0]), int(parts[1]), int(parts[2])
+    cohort_id, payload_member_tg, score = int(parts[0]), int(parts[1]), int(parts[2])
     tg_id = callback.from_user.id
+    # Verify caller is the member named in the payload and is active in this cohort
+    if payload_member_tg != tg_id or not await is_member(cohort_id, tg_id):
+        log.warning("SECURITY: user_id=%d attempted cci on cohort_id=%d member_tg=%d (not member)",
+                    tg_id, cohort_id, payload_member_tg)
+        await callback.answer()
+        return
     lang = await get_cohort_member_lang(tg_id)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
