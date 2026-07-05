@@ -8,7 +8,8 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from database import DB_PATH, get_user_lang, resolve_client
+from database import DB_PATH, get_user_lang
+from core.db.clients_repository import resolve_client
 from keyboards import analytics_section_keyboard
 from translations import t
 from utils import engagement_label, smart_flags

@@ -17,9 +17,12 @@ from aiogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from fsm_storage import SQLiteFSMStorage
 
 from database import (
-    DB_PATH, get_client_lang, get_client_timezone, get_user_lang,
-    get_user_timezone, get_cohort_member_lang, get_cohort_member_timezone,
+    DB_PATH, get_user_lang,
+    get_user_timezone,
     init_db, migrate_db, now_str, to_user_tz, utc_to_local,
+)
+from core.db.clients_repository import (
+    get_client_lang, get_client_timezone, get_cohort_member_lang, get_cohort_member_timezone,
 )
 from db_guard import ensure_db_schema
 from handlers import routers

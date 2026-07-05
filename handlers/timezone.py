@@ -10,13 +10,11 @@ from aiogram.types import CallbackQuery, Message
 from database import (
     OFFSET_TO_IANA,
     format_offset,
-    get_client_lang,
     get_user_lang,
-    get_user_roles,
     get_user_timezone,
-    set_client_timezone,
     set_user_timezone,
 )
+from core.db.clients_repository import get_client_lang, get_user_roles, set_client_timezone
 from keyboards import timezone_keyboard
 from states import TimezoneInputForm
 from translations import t

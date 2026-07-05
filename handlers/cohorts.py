@@ -21,8 +21,6 @@ from aiogram.types import (
 
 from database import (
     DB_PATH,
-    get_cohort_member_lang,
-    get_cohort_member_timezone,
     get_user_lang,
     get_user_timezone,
     local_to_utc,
@@ -30,6 +28,7 @@ from database import (
     to_user_tz,
     utc_to_local,
 )
+from core.db.clients_repository import get_cohort_member_lang, get_cohort_member_timezone
 from keyboards import (
     cancel_keyboard,
     cohort_action_keyboard,

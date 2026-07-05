@@ -16,19 +16,21 @@ from database import (
     DB_PATH,
     OFFSET_TO_IANA,
     ensure_user,
-    find_connected_client,
     format_offset,
-    get_client_lang,
     get_user_lang,
-    get_user_roles,
     make_token,
     needs_tz_confirm,
-    needs_tz_confirm_client,
     now_str,
-    reset_client_role,
-    set_client_lang,
     set_user_lang,
     set_user_timezone,
+)
+from core.db.clients_repository import (
+    find_connected_client,
+    get_client_lang,
+    get_user_roles,
+    needs_tz_confirm_client,
+    reset_client_role,
+    set_client_lang,
 )
 from handlers.legal import (
     CONSENT_TEXT_RU, consent_keyboard,

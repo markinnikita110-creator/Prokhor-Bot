@@ -13,14 +13,13 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from database import (
     DB_PATH,
-    get_client_lang,
     get_user_lang,
     get_user_timezone,
     make_token,
     now_str,
-    resolve_client,
     to_user_tz,
 )
+from core.db.clients_repository import get_client_lang, resolve_client
 from keyboards import (
     archived_list_keyboard,
     cancel_keyboard,

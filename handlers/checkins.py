@@ -10,14 +10,12 @@ from aiogram.types import CallbackQuery, Message
 
 from database import (
     DB_PATH,
-    find_connected_client,
-    get_client_lang,
     get_user_lang,
     get_user_timezone,
     now_str,
-    resolve_client,
     to_user_tz,
 )
+from core.db.clients_repository import find_connected_client, get_client_lang, resolve_client
 from keyboards import (
     cancel_keyboard,
     checkin_score_keyboard,

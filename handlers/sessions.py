@@ -10,9 +10,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from database import (
-    DB_PATH, format_offset, get_client_lang, get_client_timezone,
+    DB_PATH, format_offset,
     get_user_lang, get_user_timezone, local_to_utc, now_utc, to_user_tz, utc_to_local,
 )
+from core.db.clients_repository import get_client_lang, get_client_timezone
 from keyboards import (
     cancel_keyboard,
     session_card_keyboard,

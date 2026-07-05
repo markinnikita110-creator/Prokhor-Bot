@@ -10,7 +10,8 @@ from aiogram.types import CallbackQuery, Message
 
 from aiogram import Bot
 
-from database import DB_PATH, get_client_lang, get_user_lang, now_str, resolve_client
+from database import DB_PATH, get_user_lang, now_str
+from core.db.clients_repository import get_client_lang, resolve_client
 from keyboards import cancel_keyboard, homework_section_keyboard
 from states import AssignHomeworkForm, AssignHomeworkFromCardForm
 from translations import t
