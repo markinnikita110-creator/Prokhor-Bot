@@ -628,7 +628,12 @@ async def cohort_recurring_schedule_start(message: Message, state: FSMContext):
 async def cv2_recurring_schedule(callback: CallbackQuery, state: FSMContext):
     """RECURRING: cv2_rsched shortcut — jump straight into day-of-week picking."""
     cid = int(callback.data[len("cv2_rsched_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted rsched on cohort_id=%d (not owner)", uid, cid)
+        await callback.answer()
+        return
     await state.update_data(cohort_id=cid, days=set())
     await state.set_state(CohortRecurringScheduleForm.days)
     await callback.answer()
@@ -901,7 +906,8 @@ async def catt_got_session(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("catt_mk_"))
 async def catt_mark(callback: CallbackQuery):
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     parts = callback.data[len("catt_mk_"):].split("_")
     if len(parts) != 3:
         await callback.answer()
@@ -910,12 +916,16 @@ async def catt_mark(callback: CallbackQuery):
     if new_status not in ("present", "absent", "pending"):
         await callback.answer()
         return
-    await upsert_attendance(session_id, member_id, new_status)
     row = await _get_cohort_for_session(session_id)
     if not row:
-        await callback.answer(t(lang, "cs_att_saved"))
+        await callback.answer()
         return
     cohort_id, cohort_name, session_num = row
+    if await verify_cohort_owner(cohort_id, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted catt_mark on cohort_id=%d (not owner)", uid, cohort_id)
+        await callback.answer()
+        return
+    await upsert_attendance(session_id, member_id, new_status)
     _, kb = await _attendance_kb(session_id, cohort_id, lang)
     title = t(lang, "cs_att_title", num=session_num, cohort=cohort_name)
     await callback.answer(t(lang, "cs_att_saved"))
@@ -1694,13 +1704,17 @@ async def cv2_notes(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cv2_nses_"))
 async def cv2_notes_session(callback: CallbackQuery):
     session_id = int(callback.data[len("cv2_nses_"):])
-    lang = await get_user_lang(callback.from_user.id)
     uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_cohort_for_session(session_id)
     if not row:
         await callback.answer()
         return
     cohort_id, _, session_num = row
+    if await verify_cohort_owner(cohort_id, uid) is None:
+        log.warning("SECURITY: user_id=%d attempted nses on cohort_id=%d (not owner)", uid, cohort_id)
+        await callback.answer()
+        return
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT note_type, text FROM cohort_session_notes "
@@ -1732,9 +1746,14 @@ async def cv2_notes_session(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("cv2_nadd_"))
 async def cv2_note_add_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("cv2_nadd_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_cohort_for_session(session_id)
-    session_num = row[2] if row else "?"
+    if not row or await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted nadd on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
+        return
+    session_num = row[2]
     await state.update_data(session_id=session_id, note_type="general")
     await state.set_state(CohortSessionNoteForm.note_text)
     await callback.answer()
@@ -1773,9 +1792,14 @@ async def cv2_note_text_got(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cv2_nsoap_"))
 async def cv2_soap_start(callback: CallbackQuery, state: FSMContext):
     session_id = int(callback.data[len("cv2_nsoap_"):])
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     row = await _get_cohort_for_session(session_id)
-    session_num = row[2] if row else "?"
+    if not row or await verify_cohort_owner(row[1], uid) is None:
+        log.warning("SECURITY: user_id=%d attempted nsoap on session_id=%d (not owner)", uid, session_id)
+        await callback.answer()
+        return
+    session_num = row[2]
     await state.update_data(session_id=session_id, session_num=session_num)
     await state.set_state(CohortSOAPNoteForm.s)
     await callback.answer()
