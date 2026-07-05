@@ -28,13 +28,16 @@ from database import (
     utc_to_local,
 )
 from core.db.clients_repository import get_cohort_member_lang, get_cohort_member_timezone
-from core.db.cohorts_repository import (
+from core.services.cohorts import (
     add_member,
     archive_cohort,
+    check_add_cohort,
+    check_add_cohort_member,
     create_cohort,
     get_active_members,
     get_attendance_for_session,
     get_cohort_by_token,
+    get_cohort_for_owner,
     get_cohort_invite_token,
     get_cohort_name,
     get_cohort_status,
@@ -48,7 +51,6 @@ from core.db.cohorts_repository import (
     upsert_attendance,
     verify_cohort_owner,
 )
-from core.services.cohorts import check_add_cohort, check_add_cohort_member
 from keyboards import (
     cancel_keyboard,
     cohort_action_keyboard,
@@ -809,16 +811,10 @@ async def cohort_sessions_show(callback: CallbackQuery):
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
     cohort_id = int(callback.data[len("csl_coh_"):])
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT name FROM cohorts WHERE id = ? AND psychologist_id = ?",
-            (cohort_id, uid),
-        )
-        row = await cur.fetchone()
-    if not row:
+    cohort_name = await verify_cohort_owner(cohort_id, uid)
+    if not cohort_name:
         await callback.answer()
         return
-    cohort_name = row[0]
     sessions = await _get_cohort_sessions(cohort_id)
     await callback.answer()
     if not sessions:
@@ -939,18 +935,13 @@ async def catt_mark(callback: CallbackQuery):
 async def cv2_coh_list_cb(callback: CallbackQuery):
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, name FROM cohorts WHERE psychologist_id = ? ORDER BY created_at DESC",
-            (uid,),
-        )
-        cohorts = await cur.fetchall()
+    cohorts = await get_cohorts_for_psych(uid)
     await callback.answer()
     if not cohorts:
         await callback.message.answer(t(lang, "no_cohorts"))
         return
     rows = [[InlineKeyboardButton(text=name, callback_data=f"cv2_pick_{cid}")]
-            for cid, name in cohorts]
+            for cid, name, _max in cohorts]
     await callback.message.answer(t(lang, "cohort_list_title"),
                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -964,12 +955,7 @@ async def cv2_pick_cohort(callback: CallbackQuery):
     uid = callback.from_user.id
     lang = await get_user_lang(uid)
     cohort_id = int(callback.data[len("cv2_pick_"):])
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT name, status FROM cohorts WHERE id = ? AND psychologist_id = ?",
-            (cohort_id, uid),
-        )
-        row = await cur.fetchone()
+    row = await get_cohort_for_owner(cohort_id, uid)
     if not row:
         await callback.answer()
         return
@@ -1874,11 +1860,8 @@ async def cv2_stats(callback: CallbackQuery):
     cid = int(callback.data[len("cv2_stats_"):])
     lang = await get_user_lang(callback.from_user.id)
     cohort_name = await get_cohort_name(cid)
+    member_count = await get_member_count(cid)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT COUNT(*) FROM cohort_members WHERE cohort_id = ? AND status = 'active'", (cid,)
-        )
-        member_count = (await cur.fetchone())[0]
         cur = await db.execute(
             "SELECT COUNT(*), SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) "
             "FROM cohort_sessions WHERE cohort_id = ?", (cid,)

@@ -87,6 +87,16 @@ async def get_cohort_status(cohort_id: int) -> tuple[str, str] | None:
         return await cur.fetchone()
 
 
+async def get_cohort_for_owner(cohort_id: int, uid: int) -> tuple[str, str] | None:
+    """Return (name, status) only if uid is the owning psychologist, else None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT name, status FROM cohorts WHERE id = ? AND psychologist_id = ?",
+            (cohort_id, uid),
+        )
+        return await cur.fetchone()
+
+
 async def verify_cohort_owner(cohort_id: int, uid: int) -> str | None:
     """Return cohort name if uid is the owning psychologist, else None."""
     async with aiosqlite.connect(DB_PATH) as db:
