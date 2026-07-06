@@ -36,6 +36,11 @@ from core.services.checkins import (
     get_positive_checkins_timestamped_ordered,
     get_positive_scores,
 )
+from core.services.sessions import (
+    get_all_session_times,
+    get_next_session,
+    get_sessions_for_export,
+)
 from keyboards import (
     archived_list_keyboard,
     cancel_keyboard,
@@ -83,16 +88,10 @@ async def _client_card(client_id: int, psych_id: int, lang: str):
 
         now_dt = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
         cur = await db.execute(
-            "SELECT scheduled_at FROM sessions "
-            "WHERE psychologist_id = ? AND client_name = ? AND scheduled_at >= ? "
-            "ORDER BY scheduled_at LIMIT 1",
-            (psych_id, name, now_dt)
-        )
-        next_sess = await cur.fetchone()
-        cur = await db.execute(
             "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
         tz_row = await cur.fetchone()
 
+    next_sess = await get_next_session(psych_id, name, now_dt)
     psych_tz = tz_row[0] if tz_row else None
     avg = f"{sum(scores)/len(scores):.1f}" if scores else "N/A"
     session_str = (
@@ -446,14 +445,11 @@ async def _build_timeline(client_id: int, psych_id: int, client_name: str, lang:
     for ts, score in await get_positive_checkins_timestamped(client_id):
         events.append((ts, t(lang, "timeline_checkin", score=score)))
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT scheduled_at FROM sessions WHERE psychologist_id = ? AND client_name = ?",
-            (psych_id, client_name))
-        for (ts,) in await cur.fetchall():
-            session_utc_times.add(ts)
-            events.append((ts, t(lang, "timeline_session")))
+    for (ts,) in await get_all_session_times(psych_id, client_name):
+        session_utc_times.add(ts)
+        events.append((ts, t(lang, "timeline_session")))
 
+    async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "SELECT timezone FROM psychologists WHERE user_id = ?", (psych_id,))
         tz_row = await cur.fetchone()
@@ -490,13 +486,8 @@ async def _fetch_client_data(client_id: int, psych_id: int, client_name: str) ->
     data["notes"] = await get_notes_full(client_id)
     data["homeworks"] = await get_client_homeworks_full(client_id)
     data["checkins"] = await get_positive_checkins_timestamped_ordered(client_id)
+    data["sessions"] = await get_sessions_for_export(psych_id, client_name)
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT scheduled_at, link FROM sessions "
-            "WHERE psychologist_id = ? AND client_name = ? ORDER BY scheduled_at",
-            (psych_id, client_name))
-        data["sessions"] = await cur.fetchall()
-
         # Individual sessions (may or may not exist)
         try:
             cur = await db.execute(

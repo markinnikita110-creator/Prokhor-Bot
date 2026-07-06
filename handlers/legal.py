@@ -22,6 +22,7 @@ from aiogram.types import (
 )
 
 from database import DB_PATH, ensure_user, get_user_lang
+from core.services.sessions import count_sessions_for_psych
 from keyboards import lang_keyboard, main_menu_keyboard
 from states import OnboardingForm
 from translations import t
@@ -445,10 +446,7 @@ async def legal_delete_confirm_cb(callback: CallbackQuery, state: FSMContext):
                 "SELECT COUNT(*) FROM clients WHERE psychologist_id = ?", (uid,)
             )
             clients_left = (await cur.fetchone())[0]
-            cur = await db.execute(
-                "SELECT COUNT(*) FROM sessions WHERE psychologist_id = ?", (uid,)
-            )
-            sessions_left = (await cur.fetchone())[0]
+            sessions_left = await count_sessions_for_psych(uid)
             cur = await db.execute(
                 "SELECT COUNT(*) FROM cohorts WHERE psychologist_id = ?", (uid,)
             )

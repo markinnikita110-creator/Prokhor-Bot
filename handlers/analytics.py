@@ -17,6 +17,7 @@ from core.services.checkins import (
     get_max_checkin_timestamp,
     get_positive_scores,
 )
+from core.services.sessions import get_last_session_time
 from keyboards import analytics_section_keyboard
 from translations import t
 from utils import engagement_label, smart_flags
@@ -66,13 +67,9 @@ async def _alerts_text(psych_id: int, lang: str) -> str:
         if not last_ci or last_ci < cut_ci:
             alerts.append(t(lang, "alert_no_checkin", client=name))
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "SELECT MAX(scheduled_at) FROM sessions WHERE psychologist_id = ? AND client_name = ?",
-                (psych_id, name))
-            last_s = (await cur.fetchone())[0]
-            if not last_s or last_s < cut_ses:
-                alerts.append(t(lang, "alert_no_session", client=name))
+        last_s = await get_last_session_time(psych_id, name)
+        if not last_s or last_s < cut_ses:
+            alerts.append(t(lang, "alert_no_session", client=name))
     if not alerts:
         return t(lang, "no_alerts")
     return t(lang, "alerts_title") + "\n" + "\n".join(alerts)

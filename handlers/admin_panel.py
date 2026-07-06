@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 
 from database import DB_PATH, now_str
+from core.services.sessions import count_all_sessions, count_sessions_in_range, count_sessions_since
 from states.admin_states import AdminBroadcastForm, AdminFindForm, AdminGrantPlanForm, AdminPromoForm
 
 router = Router()
@@ -214,18 +215,16 @@ async def adm_stats(callback: CallbackQuery, state: FSMContext):
         (total_cohorts,) = await (await _q("SELECT COUNT(*) FROM cohorts")).fetchone()
         (total_members,) = await (await _q(
             "SELECT COUNT(*) FROM cohort_members WHERE status = 'active'")).fetchone()
-        (sess_today,)   = await (await _q(
-            "SELECT COUNT(*) FROM sessions WHERE scheduled_at >= ? AND scheduled_at < ?",
-            today, tomorrow)).fetchone()
-        (sess_7d,)      = await (await _q(
-            "SELECT COUNT(*) FROM sessions WHERE scheduled_at >= ?", ago7)).fetchone()
-        (sess_total,)   = await (await _q("SELECT COUNT(*) FROM sessions")).fetchone()
         try:
             (active_fsm,) = await (await _q(
                 "SELECT COUNT(*) FROM fsm_storage WHERE state IS NOT NULL AND state != 'None'"
             )).fetchone()
         except Exception:
             active_fsm = "н/д"
+
+    sess_today = await count_sessions_in_range(today, tomorrow)
+    sess_7d = await count_sessions_since(ago7)
+    sess_total = await count_all_sessions()
 
     db_mb = os.path.getsize(DB_PATH) / 1024 / 1024
 
