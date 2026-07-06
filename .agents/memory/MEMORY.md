@@ -2,3 +2,4 @@
 - [Regex in Edit tool](regex-edit-issue.md) — backslash regex patterns get truncated by Edit tool; use WriteFile for files containing regex
 - [db_guard self-healing](db-guard.md) — sync schema guard runs before asyncio.run(main()); db_execute is sync-only (aiosqlite runtime can't use it)
 - [Timezone migration](tz-migration.md) — to_user_tz() for display, local_to_utc() for storage; OFFSET_TO_IANA for new saves; client SELECT must fetch timezone not utc_offset
+- [Core layer merge strategy](core-layer-merge.md) — how to merge refactor branches with unrelated git histories; FSM owner-check pattern at mutation points
