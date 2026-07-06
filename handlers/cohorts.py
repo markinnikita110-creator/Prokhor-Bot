@@ -989,7 +989,8 @@ async def csdt_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(CohortSessionEditForm.datetime_)
 async def csdt_got_value(message: Message, state: FSMContext):
-    lang = await get_user_lang(message.from_user.id)
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
     raw = message.text.strip()
     try:
         datetime.strptime(raw, "%Y-%m-%d %H:%M")
@@ -998,7 +999,12 @@ async def csdt_got_value(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     session_id = data["session_id"]
-    _, p_offset = await get_user_timezone(message.from_user.id)
+    cohort_id = data["cohort_id"]
+    if await verify_cohort_owner(cohort_id, uid) is None:
+        log.warning("SECURITY: csdt_got_value owner mismatch session_id=%d uid=%d", session_id, uid)
+        await state.clear()
+        return
+    _, p_offset = await get_user_timezone(uid)
     scheduled_at_utc = local_to_utc(raw, p_offset)
     await update_session_field(session_id, "scheduled_at", scheduled_at_utc)
     await state.clear()
@@ -1081,6 +1087,11 @@ async def _finish_field_edit(source, state: FSMContext, field: str, value: str, 
     lang = await get_user_lang(uid)
     data = await state.get_data()
     session_id = data["session_id"]
+    cohort_id = data["cohort_id"]
+    if await verify_cohort_owner(cohort_id, uid) is None:
+        log.warning("SECURITY: _finish_field_edit owner mismatch session_id=%d uid=%d", session_id, uid)
+        await state.clear()
+        return
     await update_session_field(session_id, field, value)
     await state.clear()
     reply = t(lang, ok_key)
@@ -1348,6 +1359,11 @@ async def cv2_ci_got_interval(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     cid = data["cohort_id"]
+    uid = message.from_user.id
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: ci_interval owner mismatch cohort_id=%d uid=%d", cid, uid)
+        await state.clear()
+        return
     question = data["question"]
     await state.clear()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1705,9 +1721,15 @@ async def cv2_broadcast_got_message(message: Message, state: FSMContext):
 
 @router.callback_query(CohortBroadcastForm.confirm, F.data == "cv2_bcsend")
 async def cv2_broadcast_send(callback: CallbackQuery, state: FSMContext):
-    lang = await get_user_lang(callback.from_user.id)
+    uid = callback.from_user.id
+    lang = await get_user_lang(uid)
     data = await state.get_data()
     cid = data["cohort_id"]
+    if await verify_cohort_owner(cid, uid) is None:
+        log.warning("SECURITY: broadcast_send owner mismatch cohort_id=%d uid=%d", cid, uid)
+        await state.clear()
+        await callback.answer()
+        return
     text = data["broadcast_text"]
     members = await get_active_members(cid)
     await state.clear()

@@ -11,6 +11,11 @@ from datetime import datetime, timedelta
 import aiosqlite
 
 from core.db.base import DB_PATH
+from core.db.cohorts_repository import (
+    get_active_members,
+    get_cohort_name,
+    seed_attendance_for_session,
+)
 
 log = logging.getLogger(__name__)
 
@@ -127,42 +132,6 @@ async def delete_recurring_rule(cohort_id: int) -> None:
             (cohort_id,),
         )
         await db.execute("UPDATE cohorts SET recurring_paused = 0 WHERE id = ?", (cohort_id,))
-        await db.commit()
-
-
-# ── Cohort helpers (needed by service layer) ──────────────────────────────────
-
-async def get_cohort_name(cohort_id: int) -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT name FROM cohorts WHERE id = ?", (cohort_id,))
-        row = await cur.fetchone()
-    return row[0] if row else str(cohort_id)
-
-
-async def get_active_members(cohort_id: int) -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, telegram_id, name FROM cohort_members "
-            "WHERE cohort_id = ? AND status = 'active' ORDER BY name",
-            (cohort_id,),
-        )
-        return await cur.fetchall()
-
-
-# ── Attendance ────────────────────────────────────────────────────────────────
-
-async def seed_attendance_for_session(cohort_id: int, session_id: int) -> None:
-    """Create pending attendance rows for all active members of a cohort right
-    when a session (one-off or auto-generated) is created."""
-    members = await get_active_members(cohort_id)
-    if not members:
-        return
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.executemany(
-            "INSERT OR IGNORE INTO cohort_attendance (session_id, member_id, status) "
-            "VALUES (?, ?, 'pending')",
-            [(session_id, member_id) for member_id, _tg, _name in members],
-        )
         await db.commit()
 
 
