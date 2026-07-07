@@ -20,12 +20,11 @@ Original fixes preserved verbatim (audit §2):
   F5 — to_user_tz() with IANA timezone name for both psych and client.
 """
 
-import aiosqlite
 import logging
 from datetime import datetime, timedelta
 
-from core.db.base import DB_PATH
 from core.db.clients_repository import get_client_lang, get_client_timezone
+from core.db.plans_repository import fetch_expiring_plans
 from core.services.sessions import (
     get_sessions_pending_reminders,
     mark_reminded_24h,
@@ -127,22 +126,14 @@ async def notify_expiring_plans(bot) -> None:
     used local server time, but the window is a full calendar day so the
     notification fires correctly even with a moderate timezone offset.
 
-    user_plans lives in the not-yet-migrated tariff domain; the direct SQL
-    is intentional (per migration plan: tariffs are out of scope here).
+    Tariff SQL now lives in core/db/plans_repository.fetch_expiring_plans.
     """
     now = datetime.utcnow()
     # Window: calendar day starting tomorrow (UTC midnight → midnight+1)
     window_start = (now + timedelta(days=1)).strftime("%Y-%m-%d 00:00")
     window_end   = (now + timedelta(days=2)).strftime("%Y-%m-%d 00:00")
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT user_id, plan, expires_at FROM user_plans "
-            "WHERE plan != 'start' AND expires_at IS NOT NULL "
-            "AND expires_at >= ? AND expires_at < ?",
-            (window_start, window_end),
-        )
-        rows = await cur.fetchall()
+    rows = await fetch_expiring_plans(window_start, window_end)
 
     notified = 0
     for user_id, plan, expires_at in rows:

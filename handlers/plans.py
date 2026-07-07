@@ -4,16 +4,23 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-import aiosqlite
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from database import DB_PATH, get_user_lang, now_str
+from core.db.plans_repository import (
+    fetch_all_promos,
+    fetch_promo_code,
+    fetch_user_plan_row,
+    increment_promo_used_count,
+    insert_or_replace_promo,
+    upsert_user_plan,
+)
+from core.services.plans import PLANS, get_user_plan
+from database import get_user_lang, now_str
 from keyboards import main_menu_keyboard, settings_keyboard, tariff_keyboard
-from plan_limits import PLANS, get_user_plan
 from translations import t
 
 log = logging.getLogger(__name__)
@@ -26,23 +33,10 @@ class PromoForm(StatesGroup):
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-async def _load_plan_row(user_id: int) -> tuple[str, str | None]:
-    """Return (plan_name, expires_at) for user, defaults to ('start', None)."""
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute(
-                "SELECT plan, expires_at FROM user_plans WHERE user_id = ?", (user_id,)
-            )
-            row = await cur.fetchone()
-        return (row[0], row[1]) if row else ("start", None)
-    except Exception as e:
-        log.error("_load_plan_row error: %s", e)
-        return ("start", None)
-
-
 async def _build_tariff_text(user_id: int, lang: str) -> tuple[str, bool]:
     """Return (text, is_pro) for the main tariff screen."""
-    plan_name, expires_at = await _load_plan_row(user_id)
+    row = await fetch_user_plan_row(user_id)
+    plan_name, expires_at = (row[0], row[1]) if row else ("start", None)
     is_pro = plan_name == "pro"
 
     if is_pro:
@@ -74,13 +68,7 @@ async def promo_got_code(message: Message, state: FSMContext):
     lang = await get_user_lang(user_id)
     code = message.text.strip()
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT plan, duration_days, max_uses, used_count FROM promo_codes WHERE code = ?",
-            (code,),
-        )
-        row = await cur.fetchone()
-
+    row = await fetch_promo_code(code)
     if not row:
         msg = "❌ Промокод не найден." if lang == "ru" else "❌ Promo code not found."
         await message.answer(msg)
@@ -99,24 +87,10 @@ async def promo_got_code(message: Message, state: FSMContext):
 
     expires_at = None
     if duration_days:
-        # Use UTC so expires_at comparisons in notify_expiring_plans stay consistent
         expires_at = (datetime.utcnow() + timedelta(days=duration_days)).strftime("%Y-%m-%d %H:%M")
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO user_plans (user_id, plan, expires_at, updated_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(user_id) DO UPDATE SET
-                 plan       = excluded.plan,
-                 expires_at = excluded.expires_at,
-                 updated_at = excluded.updated_at""",
-            (user_id, plan_name, expires_at, now_str()),
-        )
-        await db.execute(
-            "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = ?",
-            (code,),
-        )
-        await db.commit()
+    await upsert_user_plan(user_id, plan_name, expires_at, now_str())
+    await increment_promo_used_count(code)
 
     plan_display = PLANS.get(plan_name, {}).get("name", plan_name)
     if expires_at:
@@ -171,7 +145,8 @@ async def tariff_screen(callback: CallbackQuery):
 async def tariff_upgrade(callback: CallbackQuery):
     await callback.answer()
     lang = await get_user_lang(callback.from_user.id)
-    plan_name, _ = await _load_plan_row(callback.from_user.id)
+    row = await fetch_user_plan_row(callback.from_user.id)
+    plan_name = row[0] if row else "start"
 
     if plan_name == "pro":
         msg = t(lang, "tariff_already_pro")
@@ -205,7 +180,8 @@ async def tariff_upgrade(callback: CallbackQuery):
 async def tariff_compare(callback: CallbackQuery):
     await callback.answer()
     lang = await get_user_lang(callback.from_user.id)
-    plan_name, _ = await _load_plan_row(callback.from_user.id)
+    row = await fetch_user_plan_row(callback.from_user.id)
+    plan_name = row[0] if row else "start"
     text = t(lang, "tariff_compare")
     try:
         await callback.message.edit_text(
@@ -223,7 +199,8 @@ async def tariff_compare(callback: CallbackQuery):
 async def tariff_history(callback: CallbackQuery):
     await callback.answer()
     lang = await get_user_lang(callback.from_user.id)
-    plan_name, expires_at = await _load_plan_row(callback.from_user.id)
+    row = await fetch_user_plan_row(callback.from_user.id)
+    plan_name, expires_at = (row[0], row[1]) if row else ("start", None)
     plan_display = PLANS.get(plan_name, {}).get("name", plan_name)
 
     lines = []
@@ -254,7 +231,8 @@ async def tariff_history(callback: CallbackQuery):
 async def tariff_howto(callback: CallbackQuery):
     await callback.answer()
     lang = await get_user_lang(callback.from_user.id)
-    plan_name, _ = await _load_plan_row(callback.from_user.id)
+    row = await fetch_user_plan_row(callback.from_user.id)
+    plan_name = row[0] if row else "start"
     text = t(lang, "tariff_howto")
     try:
         await callback.message.edit_text(
@@ -283,22 +261,10 @@ async def admin_giveplan(message: Message):
     plan_name = parts[2].lower()
     days = int(parts[3]) if len(parts) > 3 else None
     expires_at = (
-        # Use UTC — consistent with notify_expiring_plans comparisons
         (datetime.utcnow() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M") if days else None
     )
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO user_plans (user_id, plan, expires_at, updated_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(user_id) DO UPDATE SET
-                 plan       = excluded.plan,
-                 expires_at = excluded.expires_at,
-                 updated_at = excluded.updated_at""",
-            (target_id, plan_name, expires_at, now_str()),
-        )
-        await db.commit()
-
+    await upsert_user_plan(target_id, plan_name, expires_at, now_str())
     await message.answer(
         f"✅ User {target_id} → plan '{plan_name}', expires: {expires_at or 'never'}"
     )
@@ -323,15 +289,7 @@ async def admin_addpromo(message: Message):
     days = int(parts[3])
     max_uses = int(parts[4]) if len(parts) > 4 else None
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT OR REPLACE INTO promo_codes
-               (code, plan, duration_days, max_uses, used_count, created_at)
-               VALUES (?, ?, ?, ?, 0, ?)""",
-            (code, plan_name, days, max_uses, now_str()),
-        )
-        await db.commit()
-
+    await insert_or_replace_promo(code, plan_name, days, max_uses, now_str())
     await message.answer(
         f"✅ Promo '{code}' → plan '{plan_name}', {days} days, max uses: {max_uses or '∞'}"
     )
@@ -345,13 +303,7 @@ async def admin_listpromos(message: Message):
     if message.from_user.id != admin_id:
         return
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT code, plan, duration_days, max_uses, used_count "
-            "FROM promo_codes ORDER BY created_at DESC"
-        )
-        rows = await cur.fetchall()
-
+    rows = await fetch_all_promos()
     if not rows:
         await message.answer("Промокодов нет.")
         return

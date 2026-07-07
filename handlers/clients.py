@@ -131,7 +131,7 @@ async def invite_pick(callback: CallbackQuery):
 # ── c_add → start AddClientForm ────────────────────────────────────────────
 @router.callback_query(F.data == "c_add")
 async def c_add_start(callback: CallbackQuery, state: FSMContext):
-    from plan_limits import check_plan_limit
+    from core.services.plans import check_plan_limit
     lang = await get_user_lang(callback.from_user.id)
     allowed, err_msg = await check_plan_limit(callback.from_user.id, "add_client", lang=lang)
     if not allowed:
@@ -281,7 +281,7 @@ async def client_action_cb(callback: CallbackQuery, state: FSMContext, bot: Bot)
 
     # ── Export: format selection ────────────────────────────────────────────
     elif action == "exp":
-        from plan_limits import get_user_plan
+        from core.services.plans import get_user_plan
         plan = await get_user_plan(psych_id)
         if not plan.get("export"):
             msg = (
@@ -298,7 +298,7 @@ async def client_action_cb(callback: CallbackQuery, state: FSMContext, bot: Bot)
 
     # ── Export: TXT ────────────────────────────────────────────────────────
     elif action == "exp_txt":
-        from plan_limits import get_user_plan
+        from core.services.plans import get_user_plan
         plan = await get_user_plan(psych_id)
         if not plan.get("export"):
             await callback.message.answer(
@@ -315,7 +315,7 @@ async def client_action_cb(callback: CallbackQuery, state: FSMContext, bot: Bot)
 
     # ── Export: CSV ────────────────────────────────────────────────────────
     elif action == "exp_csv":
-        from plan_limits import get_user_plan
+        from core.services.plans import get_user_plan
         plan = await get_user_plan(psych_id)
         if not plan.get("export"):
             await callback.message.answer(
@@ -774,7 +774,7 @@ async def archived_clients_cmd(message: Message):
 
 @router.message(Command("export"))
 async def export_cmd(message: Message):
-    from plan_limits import get_user_plan
+    from core.services.plans import get_user_plan
     uid = message.from_user.id
     lang = await get_user_lang(uid)
     plan = await get_user_plan(uid)
@@ -805,7 +805,7 @@ async def export_cmd(message: Message):
 @router.message(Command("export_all"))
 async def export_all_cmd(message: Message):
     """Export all active clients as a single TXT archive (Pro only)."""
-    from plan_limits import get_user_plan
+    from core.services.plans import get_user_plan
     uid = message.from_user.id
     lang = await get_user_lang(uid)
     plan = await get_user_plan(uid)

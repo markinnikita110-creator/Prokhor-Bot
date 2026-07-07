@@ -193,7 +193,7 @@ async def booking_settings_cb(callback: CallbackQuery, state: FSMContext):
 
 
 async def _booking_settings_screen(message, psych_id: int, lang: str, edit: bool = False):
-    from plan_limits import get_user_plan
+    from core.services.plans import get_user_plan
     plan = await get_user_plan(psych_id)
     if not plan.get("self_booking"):
         text = t(lang, "booking_pro_only")

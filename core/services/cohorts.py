@@ -70,7 +70,7 @@ async def check_add_cohort(user_id: int, lang: str = "ru") -> tuple[bool, str]:
 
     Returns (allowed, error_message). error_message is empty when allowed.
     """
-    from plan_limits import check_plan_limit
+    from core.services.plans import check_plan_limit
     return await check_plan_limit(user_id, "add_cohort", lang=lang)
 
 
@@ -81,5 +81,5 @@ async def check_add_cohort_member(
 
     Returns (allowed, error_message). error_message is empty when allowed.
     """
-    from plan_limits import check_plan_limit
+    from core.services.plans import check_plan_limit
     return await check_plan_limit(user_id, "add_cohort_member", cohort_id=cohort_id, lang=lang)

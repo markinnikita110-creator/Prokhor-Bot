@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 @router.message(Command("supervision_case"))
 async def sup_case_start(message: Message, state: FSMContext):
     """COHORT_V2: Step 1 — show anonymization warning, then ask for client alias."""
-    from plan_limits import get_user_plan
+    from core.services.plans import get_user_plan
     lang = await get_user_lang(message.from_user.id)
     plan = await get_user_plan(message.from_user.id)
     if not plan.get("supervision"):
@@ -111,7 +111,7 @@ async def sup_got_outcome(message: Message, state: FSMContext):
 @router.message(Command("supervision_logbook"))
 async def sup_logbook(message: Message):
     """COHORT_V2: Show all supervision cases for this psychologist."""
-    from plan_limits import get_user_plan
+    from core.services.plans import get_user_plan
     uid = message.from_user.id
     lang = await get_user_lang(uid)
     plan = await get_user_plan(uid)
@@ -143,7 +143,7 @@ async def sup_logbook(message: Message):
 @router.message(Command("supervision_progress"))
 async def sup_progress(message: Message):
     """COHORT_V2: Show open supervision cases with full detail + close button."""
-    from plan_limits import get_user_plan
+    from core.services.plans import get_user_plan
     uid = message.from_user.id
     lang = await get_user_lang(uid)
     plan = await get_user_plan(uid)
