@@ -1580,11 +1580,22 @@ async def cv2_note_add_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(CohortSessionNoteForm.note_text)
 async def cv2_note_text_got(message: Message, state: FSMContext):
-    lang = await get_user_lang(message.from_user.id)
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
     data = await state.get_data()
     session_id = data["session_id"]
     note_type = data.get("note_type", "general")
     text = message.text.strip()
+    # Re-verify ownership at mutation point
+    row = await get_cohort_for_session(session_id)
+    if not row:
+        await state.clear()
+        return
+    if await verify_cohort_owner(row[0], uid) is None:
+        log.warning("SECURITY: cv2_note_text_got owner mismatch session_id=%d uid=%d",
+                    session_id, uid)
+        await state.clear()
+        return
     await state.clear()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -1650,10 +1661,20 @@ async def cv2_soap_a(message: Message, state: FSMContext):
 
 @router.message(CohortSOAPNoteForm.p)
 async def cv2_soap_p(message: Message, state: FSMContext):
-    lang = await get_user_lang(message.from_user.id)
+    uid = message.from_user.id
+    lang = await get_user_lang(uid)
     data = await state.get_data()
     session_id = data["session_id"]
     session_num = data.get("session_num", "?")
+    # Re-verify ownership at mutation point
+    row = await get_cohort_for_session(session_id)
+    if not row:
+        await state.clear()
+        return
+    if await verify_cohort_owner(row[0], uid) is None:
+        log.warning("SECURITY: cv2_soap_p owner mismatch session_id=%d uid=%d", session_id, uid)
+        await state.clear()
+        return
     text = (
         f"S: {data.get('soap_s', '')}\n"
         f"O: {data.get('soap_o', '')}\n"
