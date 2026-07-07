@@ -526,6 +526,7 @@ TEXTS = {
         "err_invalid_time":       "That format doesn't look right. Please use HH:MM (e.g. 14:30).",
 
         # Supervision
+        "sup_anonymize_warning": "⚠️ Do not use the client's real name — use a pseudonym or initials. This case is saved in your personal logbook only.",
         "sup_case_alias":       "Enter a client alias (no real names, please):",
         "sup_case_issue":       "What's the presenting issue — why did the client come?",
         "sup_case_hypothesis":  "What's your working hypothesis?",
@@ -1280,6 +1281,7 @@ TEXTS = {
         "err_invalid_time":       "Формат не распознан. Используй ЧЧ:ММ (например, 14:30).",
 
         # Супервизия
+        "sup_anonymize_warning": "⚠️ Не указывай настоящее имя клиента — используй псевдоним или инициалы. Кейс сохраняется только в твоём личном журнале.",
         "sup_case_alias":       "Введи псевдоним клиента (без реального имени):",
         "sup_case_issue":       "С каким запросом пришёл клиент?",
         "sup_case_hypothesis":  "Какова твоя рабочая гипотеза?",

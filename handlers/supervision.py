@@ -2,7 +2,6 @@
 
 import logging
 
-import aiosqlite
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -13,7 +12,13 @@ from aiogram.types import (
     Message,
 )
 
-from database import DB_PATH, get_user_lang, get_user_timezone, now_str, to_user_tz
+from core.db.supervision_repository import (
+    close_supervision_case,
+    get_supervision_logbook,
+    get_supervision_open_cases,
+    insert_supervision_case,
+)
+from database import get_user_lang, get_user_timezone, now_str, to_user_tz
 from keyboards import cancel_keyboard
 from states.supervision_states import SupervisionCaseForm
 from translations import t
@@ -26,7 +31,7 @@ log = logging.getLogger(__name__)
 
 @router.message(Command("supervision_case"))
 async def sup_case_start(message: Message, state: FSMContext):
-    """COHORT_V2: Step 1 — ask for client alias."""
+    """COHORT_V2: Step 1 — show anonymization warning, then ask for client alias."""
     from plan_limits import get_user_plan
     lang = await get_user_lang(message.from_user.id)
     plan = await get_user_plan(message.from_user.id)
@@ -37,6 +42,7 @@ async def sup_case_start(message: Message, state: FSMContext):
         await message.answer(msg)
         return
     await state.set_state(SupervisionCaseForm.client_alias)
+    await message.answer(t(lang, "sup_anonymize_warning"))
     await message.answer(t(lang, "sup_case_alias"), reply_markup=cancel_keyboard(lang))
     log.info("COHORT_V2: supervision case started by user_id=%d", message.from_user.id)
 
@@ -86,23 +92,15 @@ async def sup_got_outcome(message: Message, state: FSMContext):
     await state.clear()
 
     ts = now_str()
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "INSERT INTO supervision_cases "
-            "(psychologist_id, client_alias, presenting_issue, hypothesis, intervention, outcome, status, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
-            (
-                uid,
-                data.get("client_alias", ""),
-                data.get("presenting_issue", ""),
-                data.get("hypothesis", ""),
-                data.get("intervention", ""),
-                message.text.strip(),
-                ts, ts,
-            ),
-        )
-        case_id = cur.lastrowid
-        await db.commit()
+    case_id = await insert_supervision_case(
+        psychologist_id=uid,
+        client_alias=data.get("client_alias", ""),
+        presenting_issue=data.get("presenting_issue", ""),
+        hypothesis=data.get("hypothesis", ""),
+        intervention=data.get("intervention", ""),
+        outcome=message.text.strip(),
+        created_at=ts,
+    )
 
     await message.answer(t(lang, "sup_case_saved", alias=data.get("client_alias", "")))
     log.info("COHORT_V2: supervision case_id=%d created by user_id=%d", case_id, uid)
@@ -124,14 +122,7 @@ async def sup_logbook(message: Message):
         await message.answer(msg)
         return
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, client_alias, status, created_at "
-            "FROM supervision_cases WHERE psychologist_id = ? "
-            "ORDER BY created_at DESC",
-            (uid,),
-        )
-        cases = await cur.fetchall()
+    cases = await get_supervision_logbook(uid)
 
     if not cases:
         await message.answer(t(lang, "sup_logbook_empty"))
@@ -163,14 +154,7 @@ async def sup_progress(message: Message):
         await message.answer(msg)
         return
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id, client_alias, presenting_issue, hypothesis, intervention, outcome "
-            "FROM supervision_cases WHERE psychologist_id = ? AND status = 'open' "
-            "ORDER BY created_at DESC",
-            (uid,),
-        )
-        cases = await cur.fetchall()
+    cases = await get_supervision_open_cases(uid)
 
     if not cases:
         await message.answer(t(lang, "sup_progress_empty"))
@@ -200,20 +184,10 @@ async def sup_close_case(callback: CallbackQuery):
     lang = await get_user_lang(uid)
     case_id = int(callback.data[len("sv_close_"):])
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id FROM supervision_cases WHERE id = ? AND psychologist_id = ?",
-            (case_id, uid),
-        )
-        row = await cur.fetchone()
-        if not row:
-            await callback.answer(t(lang, "sup_case_not_found"), show_alert=True)
-            return
-        await db.execute(
-            "UPDATE supervision_cases SET status = 'closed', updated_at = ? WHERE id = ?",
-            (now_str(), case_id),
-        )
-        await db.commit()
+    closed = await close_supervision_case(case_id, uid, now_str())
+    if not closed:
+        await callback.answer(t(lang, "sup_case_not_found"), show_alert=True)
+        return
 
     await callback.answer()
     try:
