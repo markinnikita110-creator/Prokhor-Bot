@@ -28,6 +28,13 @@ from database import (
     utc_to_local,
 )
 from core.db.clients_repository import get_cohort_member_lang, get_cohort_member_timezone
+from core.db.cohort_checkins_repository import (
+    get_checkin_config,
+    get_checkin_summary,
+    save_checkin_response,
+    upsert_checkin_config,
+)
+from core.services.cohort_checkins import broadcast_to_members, send_checkin_to_members
 from core.services.cohorts import (
     add_member,
     archive_cohort,
@@ -1366,16 +1373,8 @@ async def cv2_ci_got_interval(message: Message, state: FSMContext):
         return
     question = data["question"]
     await state.clear()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO cohort_checkin_configs (cohort_id, question, interval_h) VALUES (?, ?, ?) "
-            "ON CONFLICT(cohort_id) DO UPDATE SET question=excluded.question, "
-            "interval_h=excluded.interval_h, enabled=1",
-            (cid, question, interval_h),
-        )
-        await db.commit()
+    await upsert_checkin_config(cid, question, interval_h)
     await message.answer(t(lang, "cv2_checkin_saved", q=question, h=interval_h))
-    log.info("COHORT_V2: checkin config saved cohort_id=%d interval_h=%d", cid, interval_h)
 
 
 # ── Check-in summary ──────────────────────────────────────────────────────
@@ -1390,18 +1389,7 @@ async def cv2_checkin_summary(callback: CallbackQuery):
         log.warning("SECURITY: user_id=%d attempted cisum on cohort_id=%d (not owner)", uid, cid)
         await callback.answer()
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT cm.telegram_id, cm.name, COUNT(cc.id), "
-            "COALESCE(ROUND(AVG(cc.score), 1), 0.0) "
-            "FROM cohort_members cm "
-            "LEFT JOIN cohort_checkins cc "
-            "  ON cc.cohort_id = cm.cohort_id AND cc.member_telegram_id = cm.telegram_id "
-            "WHERE cm.cohort_id = ? AND cm.status = 'active' "
-            "GROUP BY cm.telegram_id, cm.name ORDER BY cm.name",
-            (cid,),
-        )
-        rows = await cur.fetchall()
+    rows = await get_checkin_summary(cid)
     await callback.answer()
     if not rows:
         await callback.message.answer(t(lang, "cv2_no_checkin_data"))
@@ -1423,30 +1411,17 @@ async def cv2_checkin_send_now(callback: CallbackQuery):
         log.warning("SECURITY: user_id=%d attempted cisnd on cohort_id=%d (not owner)", uid, cid)
         await callback.answer()
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT question FROM cohort_checkin_configs WHERE cohort_id = ?", (cid,)
-        )
-        cfg = await cur.fetchone()
-    if not cfg or not cfg[0]:
+    question = await get_checkin_config(cid)
+    if not question:
         await callback.answer(t(lang, "cv2_checkin_ask_question"), show_alert=True)
         return
-    question = cfg[0]
     members = await get_active_members(cid)
     if not members:
         await callback.answer(t(lang, "cv2_broadcast_no_members"), show_alert=True)
         return
     await callback.answer()
-    sent = 0
-    for _, member_tg, _ in members:
-        try:
-            kb = _cohort_checkin_kb(cid, member_tg)
-            await callback.bot.send_message(member_tg, question, reply_markup=kb)
-            sent += 1
-        except Exception as e:
-            log.warning("COHORT_V2: send checkin fail member_tg=%d: %s", member_tg, e)
+    sent = await send_checkin_to_members(callback.bot, cid, members, question, _cohort_checkin_kb)
     await callback.message.answer(t(lang, "cv2_checkin_sent", count=sent))
-    log.info("COHORT_V2: checkin sent cohort_id=%d sent=%d/%d", cid, sent, len(members))
 
 
 # ── Member check-in response ──────────────────────────────────────────────
@@ -1458,28 +1433,38 @@ async def cci_response(callback: CallbackQuery):
     if len(parts) != 3:
         await callback.answer()
         return
-    cohort_id, payload_member_tg, score = int(parts[0]), int(parts[1]), int(parts[2])
     tg_id = callback.from_user.id
-    # Verify caller is the member named in the payload and is active in this cohort
+    # --- Score validation (distinct from ownership/membership failures) ---
+    try:
+        cohort_id = int(parts[0])
+        payload_member_tg = int(parts[1])
+        score = int(parts[2])
+    except (ValueError, IndexError):
+        log.warning(
+            "SECURITY: cci_response score parse error — non-integer in callback "
+            "data from user_id=%d data=%r",
+            tg_id, callback.data,
+        )
+        await callback.answer()
+        return
+    if not (1 <= score <= 10):
+        log.warning(
+            "SECURITY: cci_response score out of range score=%r cohort_id=%d user_id=%d",
+            score, cohort_id, tg_id,
+        )
+        await callback.answer()
+        return
+    # --- Membership check (separate log from score validation above) ---
     if payload_member_tg != tg_id or not await is_member(cohort_id, tg_id):
-        log.warning("SECURITY: user_id=%d attempted cci on cohort_id=%d member_tg=%d (not member)",
-                    tg_id, cohort_id, payload_member_tg)
+        log.warning(
+            "SECURITY: cci_response not-member user_id=%d cohort_id=%d payload_member_tg=%d",
+            tg_id, cohort_id, payload_member_tg,
+        )
         await callback.answer()
         return
     lang = await get_cohort_member_lang(tg_id)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT question FROM cohort_checkin_configs WHERE cohort_id = ?", (cohort_id,)
-        )
-        cfg = await cur.fetchone()
-        question = cfg[0] if cfg else ""
-        await db.execute(
-            "INSERT INTO cohort_checkins "
-            "(cohort_id, member_telegram_id, score, question_text, answered_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (cohort_id, tg_id, score, question, now_str()),
-        )
-        await db.commit()
+    question = await get_checkin_config(cohort_id) or ""
+    await save_checkin_response(cohort_id, tg_id, score, question, now_str())
     await callback.answer(t(lang, "cv2_checkin_member_thanks"), show_alert=True)
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -1755,15 +1740,8 @@ async def cv2_broadcast_send(callback: CallbackQuery, state: FSMContext):
     members = await get_active_members(cid)
     await state.clear()
     await callback.answer()
-    sent = 0
-    for _, member_tg, _ in members:
-        try:
-            await callback.bot.send_message(member_tg, text)
-            sent += 1
-        except Exception as e:
-            log.warning("COHORT_V2: broadcast fail member_tg=%d: %s", member_tg, e)
+    sent = await broadcast_to_members(callback.bot, cid, members, text)
     await callback.message.answer(t(lang, "cv2_broadcast_done", sent=sent, total=len(members)))
-    log.info("COHORT_V2: broadcast cohort_id=%d sent=%d/%d", cid, sent, len(members))
 
 
 @router.callback_query(CohortBroadcastForm.confirm, F.data == "cv2_bccancel")
