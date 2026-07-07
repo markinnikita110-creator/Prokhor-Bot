@@ -460,12 +460,33 @@ async def adm_grant_ok(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer("Применяю...")
 
-    expires_at = await _apply_plan_db(target_id, plan_name, days)
+    try:
+        expires_at = await _apply_plan_db(target_id, plan_name, days)
+    except Exception as exc:
+        log.error("ADMIN: _apply_plan_db failed user=%d plan=%s: %s", target_id, plan_name, exc)
+        try:
+            await callback.message.edit_text(
+                f"❌ Ошибка при изменении тарифа:\n`{exc}`",
+                reply_markup=_back_kb(), parse_mode="Markdown"
+            )
+        except Exception:
+            await callback.message.answer(
+                f"❌ Ошибка при изменении тарифа:\n`{exc}`",
+                reply_markup=_back_kb(), parse_mode="Markdown"
+            )
+        return
+
     label = "отозван (→ Start)" if plan_name == "start" else f"выдан {plan_name.upper()}"
-    await callback.message.edit_text(
-        f"✅ Тариф *{label}* для пользователя `{target_id}`\nИстекает: {expires_at or 'никогда'}",
-        reply_markup=_back_kb(), parse_mode="Markdown"
-    )
+    try:
+        await callback.message.edit_text(
+            f"✅ Тариф *{label}* для пользователя `{target_id}`\nИстекает: {expires_at or 'никогда'}",
+            reply_markup=_back_kb(), parse_mode="Markdown"
+        )
+    except Exception:
+        await callback.message.answer(
+            f"✅ Тариф *{label}* для пользователя `{target_id}`\nИстекает: {expires_at or 'никогда'}",
+            reply_markup=_back_kb(), parse_mode="Markdown"
+        )
     log.info("ADMIN: %s plan='%s' user=%d days=%s", "revoke" if plan_name == "start" else "give", plan_name, target_id, days)
 
 
@@ -476,7 +497,10 @@ async def adm_grant_cancel(callback: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     await callback.answer("Отменено")
-    await callback.message.edit_text("❌ Действие отменено.", reply_markup=_back_kb())
+    try:
+        await callback.message.edit_text("❌ Действие отменено.", reply_markup=_back_kb())
+    except Exception:
+        await callback.message.answer("❌ Действие отменено.", reply_markup=_back_kb())
 
 
 # ── Section: Find user ───────────────────────────────────────────────────────
@@ -1038,18 +1062,21 @@ async def adm_promo_ok(callback: CallbackQuery, state: FSMContext):
 
     days_str = f"{days} дн." if days else "бессрочно"
     max_str  = str(max_uses) if max_uses else "без ограничений"
-    await callback.message.edit_text(
+    ok_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🎟 К промокодам", callback_data="adm:promo"),
+        InlineKeyboardButton(text="⬅️ Главная",      callback_data="adm:home"),
+    ]])
+    ok_text = (
         f"✅ *Промокод создан*\n\n"
         f"Код: `{code}`\n"
         f"Тариф: `{plan.upper()}`\n"
         f"Срок: {days_str}\n"
-        f"Макс. использований: {max_str}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🎟 К промокодам", callback_data="adm:promo"),
-            InlineKeyboardButton(text="⬅️ Главная",      callback_data="adm:home"),
-        ]]),
-        parse_mode="Markdown"
+        f"Макс. использований: {max_str}"
     )
+    try:
+        await callback.message.edit_text(ok_text, reply_markup=ok_kb, parse_mode="Markdown")
+    except Exception:
+        await callback.message.answer(ok_text, reply_markup=ok_kb, parse_mode="Markdown")
     log.info(
         "ADMIN: created promo code=%s plan=%s days=%s max_uses=%s",
         code, plan, days, max_uses
@@ -1063,9 +1090,10 @@ async def adm_promo_cancel(callback: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     await callback.answer("Отменено")
-    await callback.message.edit_text(
-        "❌ Создание промокода отменено.", reply_markup=_back_kb()
-    )
+    try:
+        await callback.message.edit_text("❌ Создание промокода отменено.", reply_markup=_back_kb())
+    except Exception:
+        await callback.message.answer("❌ Создание промокода отменено.", reply_markup=_back_kb())
 
 
 # ── Delete promo ──────────────────────────────────────────────────────────────
