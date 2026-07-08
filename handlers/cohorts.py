@@ -20,13 +20,12 @@ from aiogram.types import (
 
 from database import (
     DB_PATH,
-    get_user_lang,
-    get_user_timezone,
     local_to_utc,
     now_str,
     to_user_tz,
     utc_to_local,
 )
+from core.db.users_repository import get_user_lang, get_user_timezone
 from core.db.clients_repository import get_cohort_member_lang, get_cohort_member_timezone
 from core.db.cohort_checkins_repository import (
     get_checkin_config,

@@ -31,7 +31,8 @@ from core.services.sessions import (
     mark_reminded_24h,
     mark_reminded_1h,
 )
-from database import get_user_lang, get_user_timezone, to_user_tz
+from database import to_user_tz
+from core.db.users_repository import get_user_lang, get_user_timezone
 from translations import t
 
 log = logging.getLogger(__name__)
