@@ -467,82 +467,8 @@ async def migrate_db():
         await db.commit()
 
 
-async def ensure_user(user_id: int, username: str = "") -> bool:
-    """Register psychologist if not already known.
-
-    Returns True if the user was newly created, False if they already existed.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT 1 FROM psychologists WHERE user_id = ?", (user_id,)
-        )
-        already_exists = await cur.fetchone()
-        if not already_exists:
-            await db.execute(
-                "INSERT INTO psychologists (user_id, username, created_at) VALUES (?, ?, ?)",
-                (user_id, username, now_str())
-            )
-            await db.commit()
-            return True   # freshly registered
-        return False      # already known
-
-
-async def get_user_timezone(user_id: int) -> tuple[str, int]:
-    """Return (timezone_name, utc_offset_minutes) for a psychologist."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT timezone, utc_offset FROM psychologists WHERE user_id = ?", (user_id,)
-        )
-        row = await cur.fetchone()
-    if row:
-        return (row[0] or "UTC", row[1] or 0)
-    return ("UTC", 0)
-
-
-async def set_user_timezone(user_id: int, tz_name: str, utc_offset_minutes: int):
-    """Persist psychologist's timezone and mark it as explicitly confirmed."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE psychologists SET timezone = ?, utc_offset = ?, tz_confirmed = 1"
-            " WHERE user_id = ?",
-            (tz_name, utc_offset_minutes, user_id)
-        )
-        await db.commit()
-
-
-async def needs_tz_confirm(user_id: int) -> bool:
-    """Return True if the psychologist still uses the default UTC and hasn't confirmed it.
-
-    Triggers the one-time 'please set your timezone' prompt in the main menu.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT timezone, tz_confirmed FROM psychologists WHERE user_id = ?", (user_id,)
-        )
-        row = await cur.fetchone()
-    if not row:
-        return False
-    tz, confirmed = row
-    return (not tz or tz == "UTC") and not confirmed
-
-
-async def get_user_lang(user_id: int) -> str:
-    """Return the psychologist's language preference ('en' or 'ru')."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT language FROM psychologists WHERE user_id = ?", (user_id,)
-        )
-        row = await cur.fetchone()
-    return (row[0] or "en") if row else "en"
-
-
-async def set_user_lang(user_id: int, lang: str):
-    """Persist psychologist's language choice."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE psychologists SET language = ? WHERE user_id = ?", (lang, user_id)
-        )
-        await db.commit()
+# ensure_user / get_user_lang / set_user_lang / get_user_timezone /
+# set_user_timezone / needs_tz_confirm have moved to core.db.users_repository.
 
 
 def make_token() -> str:

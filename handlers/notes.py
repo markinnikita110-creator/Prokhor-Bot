@@ -8,7 +8,8 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from database import DB_PATH, get_user_lang, now_str
+from database import DB_PATH, now_str
+from core.db.users_repository import get_user_lang
 from core.db.clients_repository import resolve_client
 from core.services.notes import (
     get_notes_text_only,

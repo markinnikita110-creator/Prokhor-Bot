@@ -12,7 +12,8 @@ from datetime import datetime, timedelta
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
-from database import get_user_lang, get_user_timezone, local_to_utc
+from database import local_to_utc
+from core.db.users_repository import get_user_lang, get_user_timezone
 from core.db.cohorts_repository import verify_cohort_owner
 from core.db.cohort_sessions_repository import (
     create_cohort_session,

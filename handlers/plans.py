@@ -11,7 +11,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from database import DB_PATH, get_user_lang, now_str
+from database import DB_PATH, now_str
+from core.db.users_repository import get_user_lang
 from keyboards import main_menu_keyboard, settings_keyboard, tariff_keyboard
 from plan_limits import PLANS, get_user_plan
 from translations import t

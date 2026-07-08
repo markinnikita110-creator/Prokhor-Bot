@@ -13,12 +13,11 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from database import (
     DB_PATH,
-    get_user_lang,
-    get_user_timezone,
     make_token,
     now_str,
     to_user_tz,
 )
+from core.db.users_repository import get_user_lang, get_user_timezone
 from core.db.clients_repository import get_client_lang, resolve_client
 from core.services.notes import (
     count_notes,

@@ -10,7 +10,8 @@ from aiogram.types import CallbackQuery, Message
 
 from aiogram import Bot
 
-from database import DB_PATH, get_user_lang, now_str
+from database import DB_PATH, now_str
+from core.db.users_repository import get_user_lang
 from core.db.clients_repository import get_client_lang, resolve_client
 from core.services.homework import (
     assign_homework,

@@ -15,12 +15,14 @@ from aiogram.types import (
 from database import (
     DB_PATH,
     OFFSET_TO_IANA,
-    ensure_user,
     format_offset,
-    get_user_lang,
     make_token,
-    needs_tz_confirm,
     now_str,
+)
+from core.db.users_repository import (
+    ensure_user,
+    get_user_lang,
+    needs_tz_confirm,
     set_user_lang,
     set_user_timezone,
 )

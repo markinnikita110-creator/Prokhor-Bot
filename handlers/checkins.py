@@ -10,11 +10,10 @@ from aiogram.types import CallbackQuery, Message
 
 from database import (
     DB_PATH,
-    get_user_lang,
-    get_user_timezone,
     now_str,
     to_user_tz,
 )
+from core.db.users_repository import get_user_lang, get_user_timezone
 from core.db.clients_repository import find_connected_client, get_client_lang, resolve_client
 from core.services.checkins import (
     get_auto_checkin_client_names,

@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from database import get_user_lang, set_user_lang
+from core.db.users_repository import get_user_lang, set_user_lang
 from core.db.clients_repository import set_client_lang
 from keyboards import lang_keyboard, main_menu_keyboard, settings_keyboard, timezone_keyboard
 from translations import t

@@ -11,8 +11,8 @@ from aiogram.types import (
 )
 
 from database import (
-    DB_PATH, OFFSET_TO_IANA, format_offset, get_client_lang, get_user_lang,
-    get_user_timezone, now_str, now_utc, to_user_tz, utc_to_local,
+    DB_PATH, OFFSET_TO_IANA, format_offset, get_client_lang,
+    now_str, now_utc, to_user_tz, utc_to_local,
 )
 from keyboards import cancel_keyboard, timezone_keyboard
 from core.services.sessions import (

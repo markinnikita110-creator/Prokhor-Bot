@@ -18,7 +18,8 @@ from core.db.supervision_repository import (
     get_supervision_open_cases,
     insert_supervision_case,
 )
-from database import get_user_lang, get_user_timezone, now_str, to_user_tz
+from database import now_str, to_user_tz
+from core.db.users_repository import get_user_lang, get_user_timezone
 from keyboards import cancel_keyboard
 from states.supervision_states import SupervisionCaseForm
 from translations import t

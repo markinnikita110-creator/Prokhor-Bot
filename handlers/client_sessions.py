@@ -11,7 +11,8 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
 
-from database import DB_PATH, get_user_lang, get_user_timezone, local_to_utc, to_user_tz, utc_to_local
+from database import DB_PATH, local_to_utc, to_user_tz, utc_to_local
+from core.db.users_repository import get_user_lang, get_user_timezone
 from core.services.sessions import (
     delete_recurring_sessions_for_client,
     delete_session,

@@ -11,8 +11,9 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from database import (
     DB_PATH, format_offset,
-    get_user_lang, get_user_timezone, local_to_utc, now_utc, to_user_tz, utc_to_local,
+    local_to_utc, now_utc, to_user_tz, utc_to_local,
 )
+from core.db.users_repository import get_user_lang, get_user_timezone
 from core.db.clients_repository import get_client_lang, get_client_timezone
 from core.services.sessions import (
     confirm_reschedule,

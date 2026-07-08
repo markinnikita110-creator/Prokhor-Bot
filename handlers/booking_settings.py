@@ -11,7 +11,8 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
 
-from database import DB_PATH, get_user_lang, now_str
+from database import DB_PATH, now_str
+from core.db.users_repository import get_user_lang, get_user_timezone
 from states.booking_states import (
     BookingEditForm, BookingExceptionForm, BookingScheduleForm, BookingSetupForm,
 )

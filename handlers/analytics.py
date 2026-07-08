@@ -8,7 +8,8 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from database import DB_PATH, get_user_lang
+from database import DB_PATH
+from core.db.users_repository import get_user_lang
 from core.db.clients_repository import resolve_client
 from core.services.notes import count_notes
 from core.services.checkins import (

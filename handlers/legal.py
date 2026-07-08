@@ -21,7 +21,8 @@ from aiogram.types import (
     Message, TelegramObject,
 )
 
-from database import DB_PATH, ensure_user, get_user_lang
+from database import DB_PATH
+from core.db.users_repository import ensure_user, get_user_lang
 from core.services.sessions import count_sessions_for_psych
 from keyboards import lang_keyboard, main_menu_keyboard
 from states import OnboardingForm
