@@ -418,6 +418,63 @@ async def migrate_db():
                 )
             """)
 
+        # PROMO_CODES: remove spurious 'type' column added on some installs
+        # (column was never part of the committed schema but exists on some
+        # real devices; its NOT NULL constraint causes every INSERT to fail)
+        cur = await db.execute("PRAGMA table_info(promo_codes)")
+        promo_cols = {row[1] for row in await cur.fetchall()}
+        if "type" in promo_cols:
+            # 1. Snapshot existing rows to logs BEFORE touching anything
+            cur = await db.execute("SELECT * FROM promo_codes")
+            existing_promos = await cur.fetchall()
+            log.info(
+                "migrate_db: promo_codes snapshot before type-column removal "
+                "(%d rows): %s", len(existing_promos), existing_promos
+            )
+            # 2. Remove any leftover temp table from a prior interrupted run
+            await db.execute("DROP TABLE IF EXISTS promo_codes_new")
+            await db.commit()  # flush before opening the explicit transaction
+            # 3. Atomic recreation — BEGIN / COMMIT / ROLLBACK explicitly so
+            #    SQLite guarantees the swap is all-or-nothing even on power loss
+            try:
+                await db.execute("BEGIN")
+                await db.execute("""
+                    CREATE TABLE promo_codes_new (
+                        code          TEXT PRIMARY KEY,
+                        plan          TEXT NOT NULL,
+                        duration_days INTEGER,
+                        max_uses      INTEGER,
+                        used_count    INTEGER NOT NULL DEFAULT 0,
+                        created_at    TEXT NOT NULL
+                    )
+                """)
+                await db.execute("""
+                    INSERT INTO promo_codes_new
+                        (code, plan, duration_days, max_uses,
+                         used_count, created_at)
+                    SELECT code, plan, duration_days, max_uses,
+                           used_count, created_at
+                    FROM   promo_codes
+                """)
+                await db.execute("DROP TABLE promo_codes")
+                await db.execute(
+                    "ALTER TABLE promo_codes_new RENAME TO promo_codes"
+                )
+                await db.commit()
+                log.info(
+                    "migrate_db: promo_codes.type column removed successfully"
+                )
+            except Exception as exc:
+                try:
+                    await db.execute("ROLLBACK")
+                except Exception:
+                    pass
+                log.error(
+                    "migrate_db: promo_codes type-column removal FAILED — "
+                    "rolled back, original table untouched: %s", exc
+                )
+                raise
+
         # ADMIN: audit log
         await db.execute(
             """CREATE TABLE IF NOT EXISTS admin_actions_log (
